@@ -1,0 +1,18 @@
+# Music Files (Too big for GitHub)
+*/*.mp3
+*/*.webm
+*/*.m4a
+*/*.part
+*/*.ytdl
+
+# Secrets
+.env
+
+# Local data
+tracks.txt
+download_archive.txt
+download.log
+
+# Python folders
+__pycache__/
+*.pyc
