@@ -38,9 +38,9 @@ def main():
     FFMPEG_PATH = r"C:\Users\Steve\.spotdl"
     
     if not is_link:
-        if not search_query.startswith("ytsearch"):
-            print(f"\n🔍 Searching YouTube for: {search_query}")
-            search_query = f"ytsearchmusic1:{search_query} playlist"
+        # Sanitize search query (remove # which can break URL parsing)
+        search_query = search_query.replace("#", "")
+        print(f"\n🔍 Searching YouTube for: {search_query}")
     else:
         print(f"\n🎥 Processing Link: {search_query}")
 
@@ -49,6 +49,7 @@ def main():
     cmd = [
         "yt-dlp",
         search_query,
+        "--default-search", "ytsearch", # Safer than ytsearchmusic:
         "--extract-audio",
         "--audio-format", "mp3",
         "--audio-quality", "4",
