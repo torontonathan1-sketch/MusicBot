@@ -13,21 +13,36 @@ def main():
     PLAYLIST_DIR = MUSIC_ROOT / "Playlists"
     PLAYLIST_DIR.mkdir(exist_ok=True)
 
+    import requests
+    
     # Determine if it's a link or a search term
+    search_query = url
     if "spotify.com" in url:
-        print("\n🎧 Spotify links require a login which we don't have.")
-        print("💡 TIP: Instead of the link, just type the NAME of the playlist (e.g. 'Chill Vibes')!")
-        return
+        print("\n🎧 Spotify link detected! Scouring YouTube for a match...")
+        try:
+            r = requests.get(url, timeout=10)
+            # Find the title in the metadata
+            match = re.search(r'property="og:title" content="(.*?)"', r.text)
+            if match:
+                playlist_title = match.group(1)
+                print(f"✨ Found Spotify Playlist: '{playlist_title}'")
+                search_query = f"ytsearchmusic1:{playlist_title} playlist"
+            else:
+                print("⚠️ Could not read the Spotify title. Try typing the name manually!")
+                return
+        except Exception as e:
+            print(f"⚠️ Error reading Spotify: {e}")
+            return
 
-    is_link = url.startswith("http")
+    is_link = search_query.startswith("http")
     FFMPEG_PATH = r"C:\Users\Steve\.spotdl"
     
-    if is_link:
-        print(f"\n🎥 Processing Link: {url}")
-        search_query = url
+    if not is_link:
+        if not search_query.startswith("ytsearch"):
+            print(f"\n🔍 Searching YouTube for: {search_query}")
+            search_query = f"ytsearchmusic1:{search_query} playlist"
     else:
-        print(f"\n🔍 Searching YouTube for: {url}")
-        search_query = f"ytsearchmusic1:{url} playlist"
+        print(f"\n🎥 Processing Link: {search_query}")
 
     output_template = str(PLAYLIST_DIR / "%(playlist|Unknown Playlist)s" / "%(playlist_index)02d - %(title)s.%(ext)s")
     
