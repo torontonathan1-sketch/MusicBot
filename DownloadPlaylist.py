@@ -20,12 +20,15 @@ def main():
     import requests
     import json
 
-    # Determine if it's a link or a search term
-    tracks_to_download = []
-    playlist_name = "Unknown Playlist"
-    FFMPEG_PATH = r"C:\Users\Steve\.spotdl"
-
-    if "spotify.com" in url:
+    # Check if the input is a path to a .txt file
+    input_path = Path(url.strip('"'))
+    if input_path.suffix == ".txt" and input_path.exists():
+        print(f"\n📄 Text file detected! Reading tracks from: {input_path.name}")
+        with open(input_path, "r", encoding="utf-8") as f:
+            tracks_to_download = [line.strip() for line in f if line.strip()]
+        playlist_name = input_path.stem
+        print(f"✨ Loaded {len(tracks_to_download)} tracks from file.")
+    elif "spotify.com" in url:
         print("\n🎧 Spotify link detected! Deep scraping tracks...")
         try:
             # Get Playlist ID and fetch Embed Page
@@ -51,16 +54,18 @@ def main():
                     items = entity['tracks']['items']
                 
                 for item in items:
-                    # Handle different track object shapes
                     t = item.get('track', item)
                     name = t.get('title', t.get('name'))
-                    # Subtitle is often the artist in the embed layout
                     artist = t.get('subtitle', 'Unknown')
                     if not artist or artist == 'Unknown':
                         artist = t.get('artists', [{}])[0].get('name', 'Unknown')
                     
                     if name:
                         tracks_to_download.append(f"{artist} - {name}")
+                
+                if len(tracks_to_download) == 100:
+                    print("⚠️ Note: Spotify's public view limits downloads to 100 tracks.")
+                    print("💡 TIP: For larger playlists, you can provide a .txt file list!")
                 
                 if not tracks_to_download:
                     print("⚠️ Scraped page but found 0 tracks. Is the playlist empty?")

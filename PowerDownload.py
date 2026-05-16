@@ -128,11 +128,11 @@ def find_artist_mbid(artist_name: str) -> Optional[str]:
 
 def get_artist_albums(mbid: str) -> list[Album]:
     """
-    Fetch all release groups for an artist, filter to studio albums/EPs,
-    then fetch track listings for each.
+    Fetch all release groups for an artist, prioritize studio albums/EPs,
+    then fetch track listings for each. Ensures exactly 10 releases if available.
     """
     log.info(f"Fetching release groups for MBID: {mbid}")
-    albums: list[Album] = []
+    all_albums: list[Album] = []
     offset = 0
     limit  = 100
 
@@ -153,17 +153,13 @@ def get_artist_albums(mbid: str) -> list[Album]:
             primary   = rg.get("primary-type", "")
             secondary = [t for t in rg.get("secondary-types", [])]
 
-            # Type filter in Python instead of API parameter
-            if primary not in INCLUDE_TYPES:
-                continue
-            if any(t in EXCLUDE_SECONDARY for t in secondary):
-                log.debug(f"  Skipping {rg['title']!r} (secondary type: {secondary})")
+            # Exclude very non-musical types
+            if primary in {"Spokenword", "Audiobook"} or any(t in {"Spokenword", "Audiobook"} for t in secondary):
                 continue
 
             year_str = rg.get("first-release-date", "")
             year = int(year_str[:4]) if len(year_str) >= 4 and year_str[:4].isdigit() else None
 
-            # Use the release group MBID to fetch tracks
             popularity = rg.get("count", 0)
             album = Album(
                 mbid=rg["id"],
@@ -173,42 +169,65 @@ def get_artist_albums(mbid: str) -> list[Album]:
                 secondary_types=secondary,
                 popularity=popularity,
             )
-            albums.append(album)
+            all_albums.append(album)
 
         offset += limit
         if offset >= data.get("release-group-count", 0):
             break
 
-    # Fetch track listings
-    log.info(f"Found {len(albums)} candidate release groups, fetching track counts…")
+    if not all_albums: return []
+
+    # Separate into Primary (Studio/EP) and Secondary (Live/Comp/Remix)
+    primary_releases = []
+    secondary_releases = []
+
+    for a in all_albums:
+        is_primary = (a.release_type in INCLUDE_TYPES) and not any(t in EXCLUDE_SECONDARY for t in a.secondary_types)
+        if is_primary:
+            primary_releases.append(a)
+        else:
+            secondary_releases.append(a)
+
+    # Sort each group: Newest first, then popularity
+    primary_releases.sort(key=lambda a: (a.year or 0, a.popularity), reverse=True)
+    secondary_releases.sort(key=lambda a: (a.year or 0, a.popularity), reverse=True)
+
+    # Pick Newest Primary + Top Popular Primary to fill up to 10
+    final_selection = []
+    if primary_releases:
+        newest = primary_releases[0]
+        rest_primary = primary_releases[1:]
+        rest_primary.sort(key=lambda a: a.popularity, reverse=True)
+        final_selection = [newest] + rest_primary[:9]
+    
+    # If still fewer than 10, fill from Secondary releases (Live/Compilations)
+    if len(final_selection) < 10:
+        gap = 10 - len(final_selection)
+        secondary_releases.sort(key=lambda a: a.popularity, reverse=True)
+        final_selection += secondary_releases[:gap]
+
+    # Fetch track listings for the final selection
+    log.info(f"Checking track counts for {len(final_selection)} selected releases…")
     populated = []
-    for album in albums:
+    for album in final_selection:
         try:
             tracks = get_tracklist(album.mbid)
             album.tracks = tracks
             if album.track_count >= MIN_TRACKS:
-                log.info(f"  ✓ {album.year or '????'} — {album.title!r} ({album.track_count} tracks)")
+                type_label = album.release_type
+                if album.secondary_types:
+                    type_label += f" ({', '.join(album.secondary_types)})"
+                log.info(f"  ✓ {album.year or '????'} — {album.title!r} [{type_label}] ({album.track_count} tracks)")
                 populated.append(album)
             else:
                 log.info(f"  ✗ {album.title!r} ({album.track_count} tracks) — below MIN_TRACKS={MIN_TRACKS}")
         except Exception as e:
             log.error(f"  Could not fetch tracklist for {album.title!r}: {e}")
 
-    # Top 10 + Newest Logic
-    populated.sort(key=lambda a: (a.year or 0), reverse=True)
-    if not populated: return []
-    
-    newest = populated[0]
-    
-    # Sort the rest by popularity (release count proxy) to get the most substantial albums (top 10 proxy)
-    rest = populated[1:]
-    rest.sort(key=lambda a: a.popularity, reverse=True)
-    
-    final_albums = [newest] + rest[:9] # Newest + Top 9 = Max 10
-    final_albums.sort(key=lambda a: (a.year or 9999, a.title))
-    
-    log.info(f"  Filtered down to {len(final_albums)} top/newest albums.")
-    return final_albums
+    # Re-sort final list by year for chronological folder ordering
+    populated.sort(key=lambda a: (a.year or 9999, a.title))
+    log.info(f"  Ready to download {len(populated)} releases.")
+    return populated
 
 
 def get_tracklist(release_group_mbid: str) -> list[Track]:
