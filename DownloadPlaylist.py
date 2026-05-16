@@ -108,8 +108,7 @@ def main():
             "--postprocessor-args", "ffmpeg:-id3v2_version 3",
             "--no-playlist",
             "--ignore-errors",
-            "--trim-filenames", "100",
-            "--cookies-from-browser", "chrome" # Bypasses age-restrictions
+            "--trim-filenames", "100"
         ]
         subprocess.run(cmd)
 
