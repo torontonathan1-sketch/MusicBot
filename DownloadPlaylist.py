@@ -33,26 +33,45 @@ def main():
             match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', r.text)
             if match:
                 data = json.loads(match.group(1))
+                entity = data['props']['pageProps']['state']['data']['entity']
+                
                 # Get Playlist Name
-                playlist_name = data['props']['pageProps']['state']['data']['entity']['name']
+                playlist_name = entity.get('name', entity.get('title', 'Unknown Playlist'))
                 print(f"✨ Found Spotify Playlist: '{playlist_name}'")
                 
-                # Get Tracks
-                items = data['props']['pageProps']['state']['data']['entity']['tracks']['items']
+                # Get Tracks (Handle multiple JSON structures)
+                items = []
+                if 'trackList' in entity:
+                    items = entity['trackList']
+                elif 'tracks' in entity and 'items' in entity['tracks']:
+                    items = entity['tracks']['items']
+                
                 for item in items:
+                    # Handle different track object shapes
                     t = item.get('track', item)
-                    name = t.get('name')
-                    artist = t.get('artists', [{}])[0].get('name', 'Unknown')
-                    tracks_to_download.append(f"{artist} - {name}")
+                    name = t.get('title', t.get('name'))
+                    # Subtitle is often the artist in the embed layout
+                    artist = t.get('subtitle', 'Unknown')
+                    if not artist or artist == 'Unknown':
+                        artist = t.get('artists', [{}])[0].get('name', 'Unknown')
+                    
+                    if name:
+                        tracks_to_download.append(f"{artist} - {name}")
+                
+                if not tracks_to_download:
+                    print("⚠️ Scraped page but found 0 tracks. Is the playlist empty?")
+                    return
             else:
                 print("⚠️ Could not scrape individual tracks. Falling back to search...")
-                tracks_to_download = [url] # Fallback to original behavior
+                tracks_to_download = [url]
         except Exception as e:
             print(f"⚠️ Error reading Spotify: {e}")
             tracks_to_download = [url]
     else:
         # It's a plain search term or YouTube link
         tracks_to_download = [url]
+
+    print(f"🚀 Scalability Mode: Preparing to process {len(tracks_to_download)} tracks...")
 
     # Process all tracks
     for i, track_query in enumerate(tracks_to_download):
@@ -65,9 +84,10 @@ def main():
             print(f"\n🎥 [{i+1}/{len(tracks_to_download)}] Processing Link: {track_query}")
             search_query = track_query
 
-        # If it's a Spotify-scraped track, force the folder to be the playlist name
+        # Folder management
         if len(tracks_to_download) > 1:
-            output_template = str(PLAYLIST_DIR / sanitize_filename(playlist_name) / f"%(title)s.%(ext)s")
+            clean_pname = sanitize_filename(playlist_name)
+            output_template = str(PLAYLIST_DIR / clean_pname / f"%(title)s.%(ext)s")
         else:
             output_template = str(PLAYLIST_DIR / "%(playlist|Unknown Playlist)s" / "%(playlist_index)02d - %(title)s.%(ext)s")
         
@@ -82,9 +102,10 @@ def main():
             "--output", output_template,
             "--add-metadata",
             "--postprocessor-args", "ffmpeg:-id3v2_version 3",
-            "--no-playlist", # Individual tracks now
+            "--no-playlist",
             "--ignore-errors",
-            "--trim-filenames", "100"
+            "--trim-filenames", "100",
+            "--cookies-from-browser", "chrome" # Bypasses age-restrictions
         ]
         subprocess.run(cmd)
 

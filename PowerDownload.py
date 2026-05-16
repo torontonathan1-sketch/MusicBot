@@ -344,7 +344,8 @@ def download_album_playlist(
         "--sleep-interval", "2",
         "--max-sleep-interval", "5",
         "--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
-        "--force-ipv4"
+        "--force-ipv4",
+        "--cookies-from-browser", "chrome"
     ]
 
     try:
@@ -389,7 +390,8 @@ def download_track_individually(
         "--trim-filenames", "100",
         "--sleep-interval", "2",
         "--max-sleep-interval", "5",
-        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "--cookies-from-browser", "chrome"
     ]
 
     try:
