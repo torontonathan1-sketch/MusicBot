@@ -140,10 +140,9 @@ def get_artist_albums(mbid: str) -> list[Album]:
         data = mb_get(
             f"release-group",
             {
-                "artist":  mbid,
+                "query":   f"arid:{mbid}",
                 "limit":   limit,
                 "offset":  offset,
-                "inc":     "releases",
             },
         )
         groups = data.get("release-groups", [])
@@ -161,18 +160,11 @@ def get_artist_albums(mbid: str) -> list[Album]:
                 log.debug(f"  Skipping {rg['title']!r} (secondary type: {secondary})")
                 continue
 
-            # Pick the earliest release to get the canonical year
-            releases = rg.get("releases", [])
-            year = None
-            if releases:
-                dates = [r.get("date", "") for r in releases if r.get("date")]
-                if dates:
-                    dates.sort()
-                    year_str = dates[0][:4]
-                    year = int(year_str) if year_str.isdigit() else None
+            year_str = rg.get("first-release-date", "")
+            year = int(year_str[:4]) if len(year_str) >= 4 and year_str[:4].isdigit() else None
 
             # Use the release group MBID to fetch tracks
-            popularity = len(releases)
+            popularity = rg.get("count", 0)
             album = Album(
                 mbid=rg["id"],
                 title=rg["title"],
@@ -427,7 +419,7 @@ def ensure_folder_jpg(album_dir: Path):
     if not jpg_path.exists() and images:
         source_img = images[0]
         cmd = [
-            FFMPEG_PATH,
+            os.path.join(FFMPEG_PATH, "ffmpeg.exe"),
             "-i", str(source_img),
             "-vf", "scale=150:150",
             "-q:v", "5",

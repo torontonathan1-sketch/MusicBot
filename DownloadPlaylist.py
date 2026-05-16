@@ -57,7 +57,7 @@ def main():
             if not jpg_path.exists() and images:
                 source_img = images[0]
                 try:
-                    subprocess.run([FFMPEG_PATH, "-i", str(source_img), "-vf", "scale=150:150", "-q:v", "5", str(jpg_path), "-y", "-v", "quiet"], timeout=30)
+                    subprocess.run([os.path.join(FFMPEG_PATH, "ffmpeg.exe"), "-i", str(source_img), "-vf", "scale=150:150", "-q:v", "5", str(jpg_path), "-y", "-v", "quiet"], timeout=30)
                 except: pass
                 
             for img in images:
