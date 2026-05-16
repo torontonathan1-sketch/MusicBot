@@ -3,6 +3,10 @@ import subprocess
 import re
 from pathlib import Path
 
+def sanitize_filename(name: str) -> str:
+    """Remove characters illegal in Windows filenames."""
+    return re.sub(r'[<>:"/\\|?*]', "", name).strip()
+
 def main():
     if len(sys.argv) < 2:
         print("Please provide a playlist URL.")
