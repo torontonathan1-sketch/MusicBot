@@ -37,7 +37,6 @@ def main():
             "--audio-quality", "4",
             "--ffmpeg-location", FFMPEG_PATH,
             "--output", output_template,
-            "--write-thumbnail",
             "--add-metadata",
             "--postprocessor-args", "ffmpeg:-id3v2_version 3",
             "--yes-playlist",
@@ -45,26 +44,7 @@ def main():
             "--trim-filenames", "100"
         ]
         subprocess.run(cmd)
-        
-        # Make folder.jpg for each playlist directory
-        for p_dir in PLAYLIST_DIR.iterdir():
-            if not p_dir.is_dir(): continue
-            jpg_path = p_dir / "folder.jpg"
-            images = []
-            for ext in ["*.jpg", "*.webp", "*.png"]:
-                images.extend(p_dir.glob(ext))
-            
-            if not jpg_path.exists() and images:
-                source_img = images[0]
-                try:
-                    subprocess.run([os.path.join(FFMPEG_PATH, "ffmpeg.exe"), "-i", str(source_img), "-vf", "scale=150:150", "-q:v", "5", str(jpg_path), "-y", "-v", "quiet"], timeout=30)
-                except: pass
-                
-            for img in images:
-                if img.name != "folder.jpg":
-                    try: img.unlink()
-                    except: pass
-        
+
     print(f"\n✅ Playlist processing complete! Check: {PLAYLIST_DIR.absolute()}")
 
 if __name__ == "__main__":

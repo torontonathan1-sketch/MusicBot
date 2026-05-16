@@ -328,7 +328,6 @@ def download_album_playlist(
         "--audio-quality", "4",
         "--ffmpeg-location", FFMPEG_PATH,
         "--output", output_template,
-        "--write-thumbnail",
         "--add-metadata",
         "--postprocessor-args", (
             f"ffmpeg:-metadata artist={artist_name!r} "
@@ -374,7 +373,6 @@ def download_track_individually(
         "--audio-quality", "4",
         "--ffmpeg-location", FFMPEG_PATH,
         "--output", str(output_path),
-        "--write-thumbnail",
         "--add-metadata",
         "--postprocessor-args", (
             f"ffmpeg:-metadata artist={artist_name!r} "
@@ -409,35 +407,7 @@ def album_already_downloaded(output_dir: Path, expected_count: int) -> bool:
         return True
     return False
 
-def ensure_folder_jpg(album_dir: Path):
-    jpg_path = album_dir / "folder.jpg"
-    
-    images = []
-    for ext in ["*.jpg", "*.webp", "*.png"]:
-        images.extend(album_dir.glob(ext))
-        
-    if not jpg_path.exists() and images:
-        source_img = images[0]
-        cmd = [
-            os.path.join(FFMPEG_PATH, "ffmpeg.exe"),
-            "-i", str(source_img),
-            "-vf", "scale=150:150",
-            "-q:v", "5",
-            str(jpg_path),
-            "-y",
-            "-v", "quiet"
-        ]
-        try:
-            subprocess.run(cmd, timeout=30)
-        except Exception as e:
-            log.error(f"  Failed to create folder.jpg: {e}")
-            
-    for img in images:
-        if img.name != "folder.jpg":
-            try:
-                img.unlink()
-            except:
-                pass
+
 
 # ── Main orchestration ────────────────────────────────────────────────────────
 
@@ -472,7 +442,6 @@ def process_artist(artist_name: str, total_bar):
                 missing_tracks.append(track)
         
         if not missing_tracks:
-            ensure_folder_jpg(album_dir)
             album_bar.update(1)
             continue
 
@@ -482,7 +451,6 @@ def process_artist(artist_name: str, total_bar):
             playlist = ytdlp_search_playlist(query, album.track_count, artist_name, album)
             if playlist:
                 download_album_playlist(playlist, artist_name, album, album_dir)
-                ensure_folder_jpg(album_dir)
                 album_bar.update(1)
                 continue
 
@@ -490,7 +458,6 @@ def process_artist(artist_name: str, total_bar):
         for track in missing_tracks:
             download_track_individually(artist_name, album, track, album_dir)
         
-        ensure_folder_jpg(album_dir)
         album_bar.update(1)
     
     album_bar.close()
