@@ -26,7 +26,7 @@ def main():
             if match:
                 playlist_title = match.group(1)
                 print(f"✨ Found Spotify Playlist: '{playlist_title}'")
-                search_query = f"ytsearchmusic1:{playlist_title} playlist"
+                search_query = f"{playlist_title} playlist"
             else:
                 print("⚠️ Could not read the Spotify title. Try typing the name manually!")
                 return
