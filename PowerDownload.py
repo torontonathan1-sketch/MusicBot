@@ -361,12 +361,19 @@ def get_spotify_artist_albums(artist_id: str) -> list[Album]:
         'Accept': 'application/json',
     }
 
-    # First get an anonymous access token from Spotify's open token endpoint
+    # Get anonymous access token by simulating a real browser session
     try:
-        token_r = requests.get(
+        session = requests.Session()
+        session.headers.update(headers)
+        # Visit homepage first to pick up session cookies (sp_t, sp_landing etc.)
+        session.get("https://open.spotify.com/", timeout=10)
+        token_r = session.get(
             "https://open.spotify.com/get_access_token?reason=transport&productType=web_player",
-            headers=headers, timeout=10
+            timeout=10
         )
+        if token_r.status_code != 200 or not token_r.text.strip().startswith("{"):
+            log.warning(f"Spotify token endpoint returned non-JSON (status {token_r.status_code}).")
+            return []
         token_data = token_r.json()
         access_token = token_data.get("accessToken")
         if not access_token:
@@ -384,10 +391,11 @@ def get_spotify_artist_albums(artist_id: str) -> list[Album]:
     limit = 50
     while True:
         try:
-            r = requests.get(
+            r = session.get(
                 f"https://api.spotify.com/v1/artists/{artist_id}/albums",
                 params={"limit": limit, "offset": offset, "include_groups": "album,single"},
-                headers=auth_headers, timeout=10
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10
             )
             if r.status_code != 200:
                 log.warning(f"Spotify albums endpoint returned {r.status_code}")
@@ -617,14 +625,17 @@ def get_artist_albums_mb(mbid: str) -> list[Album]:
             group_list.sort(key=lambda x: x.popularity, reverse=True)
             representatives.append(group_list[0])
             
-    representatives.sort(key=lambda x: x.popularity, reverse=True)
-    
-    # Select target count (9 if latest_parsed exists, otherwise 10)
-    target_count = 9 if latest_parsed else 10
-    final_selection = []
-    if latest_parsed:
-        final_selection.append(latest_parsed)
-    final_selection.extend(representatives[:target_count])
+    # Sort: studio albums first, then EPs, then by year descending (newest = most relevant)
+    def release_type_rank(a):
+        if a.release_type == "Album" and not a.secondary_types:
+            return 0  # Pure studio album — top priority
+        elif a.release_type == "Album":
+            return 1
+        elif a.release_type == "EP":
+            return 2
+        else:
+            return 3
+    representatives.sort(key=lambda x: (release_type_rank(x), -(x.year or 0)))
 
     # Fetch tracklists for ALL representatives — keep going until we have 10 valid ones
     target_count = 9 if latest_parsed else 10
