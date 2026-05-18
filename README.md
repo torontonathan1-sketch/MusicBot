@@ -1,28 +1,65 @@
-# 🎵 Music Bot 2.0
+# 🎵 Notion & Spotify Music Bot 2.0
 
-An autonomous, highly optimized music discography downloader that perfectly structures tracks for offline MP3 players. It uses the MusicBrainz database to dynamically identify an artist's discography, picks their Top 10 most popular studio albums (guaranteeing the newest release and Deluxe editions), and downloads them cleanly via `yt-dlp`.
+An autonomous, premium music bot designed to perfectly organize, download, and tag music discographies for your local library or offline MP3 players. It leverages Spotify's public and official APIs to identify artists' popular catalogs, guarantees their latest release, fetches unlimited tracks from Spotify playlists, and logs age-verification or connection errors for easy manual retrieval later.
 
-## Features
-- **Intelligent Discography Filtering:** Automatically prioritizes true popularity (based on global release counts) and hunts down Deluxe editions to maximize your song count.
-- **Hardware-Ready MP3 Optimization:** Perfect for older MP3 players. Shrinks album artwork to a precise 150x150 `folder.jpg`, strictly avoids memory-crashing embedded art, and applies highly compatible ID3v2.3 tags.
-- **Infinite Notion Auto-Sync:** Add artists to a Notion checklist on your phone, and the bot will pull them down in the background automatically.
-- **Spotify & YouTube Playlists:** Includes a dedicated playlist downloader script.
+---
 
-## Setup Instructions
+## ✨ Premium Features
 
-1. **Download the Bot:** Click the green `Code` button above and select `Download ZIP`, then extract it to a folder (like `Music`).
-2. **Install Python:** Ensure Python is installed on your Windows computer.
-3. **Install Requirements:** Open a terminal in the folder and run:
-   ```bash
-   pip install yt-dlp zotify requests tqdm python-dotenv
-   ```
-4. **Notion Setup (Optional):** Create a `.env` file with your Notion credentials if you want to use the checklist sync:
-   ```env
-   NOTION_TOKEN=your_integration_token
-   PAGE_ID=your_page_id
-   ```
+### 🎧 Spotify Artist Discovery
+*   **Top 9 Albums + Latest Release:** Instead of dry database mappings, the bot goes straight to Spotify to fetch the artist's **Top 9 popular releases** and their **Latest Release** (for a perfect 10-album collection!).
+*   **Deluxe Album Prioritization:** Fetches complete track listings directly from Spotify's public embed database.
 
-## How to Run
+### 🚀 Unlimited Playlist Scalability
+*   **Dual-Mode Playlist Downloader:** Downloads playlists of **any size** (thousands of tracks!).
+*   **Official Spotify API Mode:** By simply adding API credentials to `.env`, the bot authenticates and paginates endlessly through massive playlists.
+*   **Fallback Scraper Mode:** If keys are absent, it safely falls back to downloading the first 100 tracks unauthenticated.
 
-- **Full Discographies:** Double click `OrganizeLibrary.ps1` to start the autonomous downloader! It will read your Notion list and build out the artist folders.
-- **Playlists:** Double click `DownloadPlaylist.ps1` and paste any YouTube or Spotify playlist URL.
+### 📝 Notion Database Synchronization
+*   Add and prioritize artists from your phone on the go! The bot syncs your Notion database checklist in the background and keeps your library up to date.
+
+### 🛠️ Failed Downloads Error Tracker
+*   If a download fails due to age-verification checks (`ERROR: Sign in to confirm your age`), geographic restrictions, or network blocks, the bot logs it in `failed_downloads.txt`. 
+*   Includes the exact **Artist**, **Album**, **Track**, and the **Error Message** so you can grab them separately later.
+
+---
+
+## 🚀 Quick Start & Setup
+
+For a complete step-by-step setup guide including environment variables, Windows execution policy unlocking, Notion page connection, and Spotify developer key setups, see our **[Premium Installation Guide](file:///d:/Music/INSTALLATION_GUIDE.md)**!
+
+### 1. Prerequisites
+*   Ensure Python 3.12 is installed.
+*   Install required Python modules:
+    ```powershell
+    pip install requests tqdm python-dotenv yt-dlp
+    ```
+
+### 2. Configure Environment
+Create a `.env` file in the folder:
+```env
+# Notion Setup
+NOTION_TOKEN=secret_yourNotionToken
+NOTION_DB_ID=yourDatabaseID
+
+# Spotify API Setup (Optional - unlocks unlimited playlist track fetching)
+SPOTIFY_CLIENT_ID=yourClientID
+SPOTIFY_CLIENT_SECRET=yourClientSecret
+```
+
+---
+
+## 🏃 Running the Bot
+
+### 🔄 Sync Notion Checklist & Download Albums
+Double-click `OrganizeLibrary.ps1` or run it in PowerShell:
+```powershell
+.\OrganizeLibrary.ps1
+```
+
+### 📥 Download Spotify/YouTube Playlists Directly
+Double-click `DownloadPlaylist.ps1` or run it in PowerShell:
+```powershell
+.\DownloadPlaylist.ps1
+```
+*   Enter your Spotify or YouTube playlist URL when prompted, and watch it download!

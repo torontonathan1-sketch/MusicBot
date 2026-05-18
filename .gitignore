@@ -1,18 +1,27 @@
-# Music Files (Too big for GitHub)
-*/*.mp3
-*/*.webm
-*/*.m4a
-*/*.part
-*/*.ytdl
-
-# Secrets
+# Environment variables and secrets
 .env
 
-# Local data
+# Downloaded music directories and files
+*.mp3
+*.wav
+Playlists/
+failed_downloads.txt
+/*/
 tracks.txt
-download_archive.txt
-download.log
 
-# Python folders
+# Python cache and temporary files
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+ENV/
+
+# System and logs
+*.log
+.DS_Store
+Thumbs.db
+paste start bot.txt
+scratch_spotify.py
