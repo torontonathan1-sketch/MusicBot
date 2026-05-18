@@ -350,100 +350,87 @@ def get_spotify_albums_api(client_id: str, client_secret: str, artist_name: str)
 
 def get_spotify_artist_albums(artist_id: str) -> list[Album]:
     """
-    Fetch all albums for a Spotify artist, identify the latest release,
-    select the top 9 popular albums, and fetch tracklists for exactly 10 total.
-    (Local unauthenticated public page scraper fallback)
+    Fetch artist albums via Spotify's public query API (no credentials needed).
+    Gets all album/single pages, deduplicates by base title, prioritizes Deluxe editions,
+    selects top 9 by popularity + newest within 1 year.
     """
-    url = f"https://open.spotify.com/artist/{artist_id}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'}
-    r = requests.get(url, headers=headers, timeout=15)
-    
-    # Extract initialState
-    match = re.search(r'<script id="initialState" type="text/plain">(.*?)</script>', r.text)
-    if not match:
+    # Use Spotify public partner API — same endpoint the free web player uses
+    base_url = "https://api-partner.spotify.com/pathfinder/v1/query"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+    }
+
+    # First get an anonymous access token from Spotify's open token endpoint
+    try:
+        token_r = requests.get(
+            "https://open.spotify.com/get_access_token?reason=transport&productType=web_player",
+            headers=headers, timeout=10
+        )
+        token_data = token_r.json()
+        access_token = token_data.get("accessToken")
+        if not access_token:
+            log.warning("Could not obtain anonymous Spotify token.")
+            return []
+    except Exception as e:
+        log.warning(f"Failed to get anonymous Spotify token: {e}")
+        return []
+
+    auth_headers = {**headers, "Authorization": f"Bearer {access_token}"}
+
+    # Paginate through all albums for this artist using the official albums endpoint
+    all_album_items = []
+    offset = 0
+    limit = 50
+    while True:
+        try:
+            r = requests.get(
+                f"https://api.spotify.com/v1/artists/{artist_id}/albums",
+                params={"limit": limit, "offset": offset, "include_groups": "album,single"},
+                headers=auth_headers, timeout=10
+            )
+            if r.status_code != 200:
+                log.warning(f"Spotify albums endpoint returned {r.status_code}")
+                break
+            data = r.json()
+            items = data.get("items", [])
+            if not items:
+                break
+            all_album_items.extend(items)
+            if len(items) < limit:
+                break
+            offset += limit
+        except Exception as e:
+            log.warning(f"Error paginating Spotify albums: {e}")
+            break
+
+    if not all_album_items:
         log.warning("Could not find initialState block in Spotify Artist page.")
         return []
         
-    try:
-        decoded = base64.b64decode(match.group(1).strip()).decode('utf-8')
-        data = json.loads(decoded)
-    except Exception as e:
-        log.error(f"Failed to decode Spotify artist initialState: {e}")
-        return []
-        
-    # Fetch the artist data from entities
-    items_dict = data.get('entities', {}).get('items', {})
-    artist_key = f"spotify:artist:{artist_id}"
-    artist_data = items_dict.get(artist_key, {})
-    discography = artist_data.get('discography', {})
-    
-    latest_release_item = None
-    popular_items = []
-    all_album_items = []
-    
-    # 1. Latest release
-    latest_section = discography.get('latest', {})
-    if latest_section:
-        latest_release_item = latest_section
-        
-    # 2. Popular releases
-    popular_section = discography.get('popularReleasesAlbums', {})
-    popular_items = popular_section.get('items', [])
-    
-    # 3. All albums fallback
-    albums_section = discography.get('albums', {})
-    all_album_items = albums_section.get('items', [])
-    
-    def parse_release_item(item, is_latest=False):
-        rel = item.get('releases', {}).get('items', [{}])[0] if 'releases' in item else item
-        name = rel.get('name') or item.get('name')
-        uri = rel.get('uri') or item.get('uri')
-        if not uri or not name:
-            return None
-        album_id = uri.split(':')[-1]
-        
-        year_data = rel.get('date', {}) or item.get('releaseDate', {})
-        year = None
-        if isinstance(year_data, dict):
-            year = year_data.get('year')
-        elif isinstance(year_data, str) and len(year_data) >= 4:
-            year = int(year_data[:4]) if year_data[:4].isdigit() else None
-            
-        return Album(
-            mbid=album_id, # Reusing mbid field for Spotify Album ID
-            title=name,
-            year=year,
-            release_type="Album",
-            secondary_types=[]
-        )
-        
-    # Look for the newest release within 1 year (released in 2025 or 2026)
-    latest_parsed = None
-    if latest_release_item:
-        parsed = parse_release_item(latest_release_item, is_latest=True)
-        if parsed and parsed.year and parsed.year >= 2025:
-            latest_parsed = parsed
-            log.info(f"  → Found newest release within 1 year (Scraper): {latest_parsed.title} ({latest_parsed.year})")
-            
-    # Combine popular and all albums into candidate list
-    candidates = []
-    seen_cand_ids = set()
-    if latest_parsed:
-        seen_cand_ids.add(latest_parsed.mbid)
-        
-    for item in popular_items:
-        parsed = parse_release_item(item)
-        if parsed and parsed.mbid not in seen_cand_ids:
-            candidates.append(parsed)
-            seen_cand_ids.add(parsed.mbid)
-            
+    # Parse all items into Album objects
+    candidates_raw = []
     for item in all_album_items:
-        parsed = parse_release_item(item)
-        if parsed and parsed.mbid not in seen_cand_ids:
-            candidates.append(parsed)
-            seen_cand_ids.add(parsed.mbid)
-            
-    # Deduplicate candidates by base name and prioritize deluxe editions
+        name = item.get("name")
+        album_id = item.get("id")
+        if not name or not album_id:
+            continue
+        date_str = item.get("release_date", "")
+        year = int(date_str[:4]) if len(date_str) >= 4 and date_str[:4].isdigit() else None
+        popularity = item.get("popularity", 0)
+        a = Album(mbid=album_id, title=name, year=year, release_type=item.get("album_type", "album"), secondary_types=[])
+        a.popularity = popularity
+        candidates_raw.append(a)
+
+    # Look for the newest release within 1 year
+    recent = [a for a in candidates_raw if a.year and a.year >= 2025]
+    latest_parsed = None
+    if recent:
+        recent.sort(key=lambda x: (x.year or 0, x.popularity), reverse=True)
+        latest_parsed = recent[0]
+        log.info(f"  → Found newest release within 1 year (Spotify): {latest_parsed.title} ({latest_parsed.year})")
+
+    # Deduplicate by base name, prefer deluxe editions
     def clean_album_name_for_dedup(name: str) -> str:
         n = name.lower()
         for keyword in ["deluxe", "expanded", "bonus", "complete", "special", "super", "tour edition", "repacked", "platinum"]:
@@ -455,36 +442,49 @@ def get_spotify_artist_albums(artist_id: str) -> list[Album]:
         n = name.lower()
         return any(k in n for k in ["deluxe", "expanded", "bonus", "complete", "special", "platinum"])
 
+    seen_cand_ids = {latest_parsed.mbid} if latest_parsed else set()
     groups = {}
-    for a in candidates:
+    for a in candidates_raw:
+        if a.mbid in seen_cand_ids:
+            continue
         base_name = clean_album_name_for_dedup(a.title)
         if base_name not in groups:
             groups[base_name] = []
         groups[base_name].append(a)
-        
+
     representatives = []
     for base_name, group_list in groups.items():
         deluxe_editions = [a for a in group_list if is_deluxe(a.title)]
         if deluxe_editions:
-            deluxe_editions.sort(key=lambda x: (x.year or 0), reverse=True)
+            deluxe_editions.sort(key=lambda x: x.popularity, reverse=True)
             representatives.append(deluxe_editions[0])
         else:
-            group_list.sort(key=lambda x: (x.year or 0), reverse=True)
+            group_list.sort(key=lambda x: x.popularity, reverse=True)
             representatives.append(group_list[0])
-            
-    representatives.sort(key=lambda x: (x.year or 0), reverse=True)
-    
-    # Select target count (9 if latest_parsed exists, otherwise 10)
+
+    representatives.sort(key=lambda x: x.popularity, reverse=True)
+
+    # Keep fetching tracklists from ALL representatives until we have 10 valid ones
     target_count = 9 if latest_parsed else 10
-    final_selection = []
-    if latest_parsed:
-        final_selection.append(latest_parsed)
-    final_selection.extend(representatives[:target_count])
-                    
-    # Fetch tracks for each selected album
-    log.info(f"Checking track lists for {len(final_selection)} selected Spotify releases…")
     populated = []
-    for album in final_selection:
+    if latest_parsed:
+        try:
+            tracks = get_spotify_album_tracklist(latest_parsed.mbid)
+            latest_parsed.tracks = tracks
+            if latest_parsed.track_count >= MIN_TRACKS:
+                log.info(f"  ✓ {latest_parsed.year or '????'} — {latest_parsed.title!r} ({latest_parsed.track_count} tracks)")
+                populated.append(latest_parsed)
+            else:
+                log.info(f"  ✗ {latest_parsed.title!r} ({latest_parsed.track_count} tracks) — below MIN_TRACKS, skipping latest")
+                target_count = 10  # fill the slot
+        except Exception as e:
+            log.error(f"  Could not fetch tracklist for latest {latest_parsed.title!r}: {e}")
+            target_count = 10
+
+    log.info(f"Checking tracklists for all {len(representatives)} Spotify candidates until {target_count} valid found…")
+    for album in representatives:
+        if len(populated) >= (target_count + (1 if latest_parsed and populated and populated[0].mbid == latest_parsed.mbid else 0)):
+            break
         try:
             tracks = get_spotify_album_tracklist(album.mbid)
             album.tracks = tracks
@@ -492,10 +492,10 @@ def get_spotify_artist_albums(artist_id: str) -> list[Album]:
                 log.info(f"  ✓ {album.year or '????'} — {album.title!r} ({album.track_count} tracks)")
                 populated.append(album)
             else:
-                log.info(f"  ✗ {album.title!r} ({album.track_count} tracks) — below MIN_TRACKS={MIN_TRACKS}")
+                log.info(f"  ✗ {album.title!r} ({album.track_count} tracks) — below MIN_TRACKS, trying next…")
         except Exception as e:
             log.error(f"  Could not fetch tracklist for {album.title!r}: {e}")
-            
+
     populated.sort(key=lambda a: (a.year or 9999, a.title))
     log.info(f"  Ready to download {len(populated)} Spotify albums.")
     return populated
@@ -626,17 +626,39 @@ def get_artist_albums_mb(mbid: str) -> list[Album]:
         final_selection.append(latest_parsed)
     final_selection.extend(representatives[:target_count])
 
-    log.info(f"Checking track counts for {len(final_selection)} MusicBrainz releases…")
+    # Fetch tracklists for ALL representatives — keep going until we have 10 valid ones
+    target_count = 9 if latest_parsed else 10
     populated = []
-    for album in final_selection:
+
+    # Handle latest release first
+    if latest_parsed:
+        try:
+            tracks = get_tracklist_mb(latest_parsed.mbid)
+            latest_parsed.tracks = tracks
+            if latest_parsed.track_count >= MIN_TRACKS:
+                log.info(f"  ✓ {latest_parsed.year or '????'} — {latest_parsed.title!r} ({latest_parsed.track_count} tracks)")
+                populated.append(latest_parsed)
+            else:
+                log.info(f"  ✗ {latest_parsed.title!r} ({latest_parsed.track_count} tracks) — below MIN_TRACKS, skipping latest")
+                target_count = 10  # fill the slot
+        except Exception as e:
+            log.error(f"  Could not fetch tracklist for latest {latest_parsed.title!r}: {e}")
+            target_count = 10
+
+    log.info(f"Checking tracklists for all {len(representatives)} MusicBrainz candidates until {target_count} valid found…")
+    valid_non_latest = 0
+    for album in representatives:
+        if valid_non_latest >= target_count:
+            break
         try:
             tracks = get_tracklist_mb(album.mbid)
             album.tracks = tracks
             if album.track_count >= MIN_TRACKS:
                 log.info(f"  ✓ {album.year or '????'} — {album.title!r} ({album.track_count} tracks)")
                 populated.append(album)
+                valid_non_latest += 1
             else:
-                log.info(f"  ✗ {album.title!r} ({album.track_count} tracks) — below MIN_TRACKS={MIN_TRACKS}")
+                log.info(f"  ✗ {album.title!r} ({album.track_count} tracks) — below MIN_TRACKS, trying next…")
         except Exception as e:
             log.error(f"  Could not fetch tracklist for {album.title!r}: {e}")
 
