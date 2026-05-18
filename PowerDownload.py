@@ -548,6 +548,20 @@ def get_artist_albums_mb(mbid: str) -> list[Album]:
         offset += limit
         if offset >= data.get("release-group-count", 0):
             break
+    if not all_albums: return []
+
+    primary_releases = []
+    secondary_releases = []
+
+    for a in all_albums:
+        is_primary = (a.release_type in INCLUDE_TYPES) and not any(t in EXCLUDE_SECONDARY for t in a.secondary_types)
+        if is_primary:
+            primary_releases.append(a)
+        else:
+            secondary_releases.append(a)
+
+    primary_releases.sort(key=lambda a: (a.year or 0, a.popularity), reverse=True)
+    secondary_releases.sort(key=lambda a: (a.year or 0, a.popularity), reverse=True)
 
     # Look for the newest release within 1 year (released in 2025 or 2026)
     recent_releases = [a for a in all_albums if a.year and a.year >= 2025]
@@ -965,7 +979,8 @@ def main():
         if (i + 1) % 5 == 0 and args.file:
             log.info("Reached 5 artists. Re-syncing Notion checklist...")
             try:
-                subprocess.run(["py", "SyncNotion.py"], cwd=str(MUSIC_ROOT))
+                import sys
+                subprocess.run([sys.executable, "SyncNotion.py"], cwd=str(MUSIC_ROOT))
                 with open(args.file, encoding="utf-8") as f:
                     new_artists = [l.strip() for l in f if l.strip()]
                 for na in new_artists:
