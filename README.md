@@ -13,6 +13,7 @@ An autonomous, premium music downloader designed to perfectly organize, download
 *   **🔄 Notion Checklist Sync:** Add artists from your Notion app on your phone, and the bot automatically pulls, syncs, and appends them to its target list every 5 artists in the background!
 *   **🎧 Unlimited Playlists:** Seamlessly fetches and downloads Spotify playlists of any size.
 *   **⚠️ Failed Downloads Tracker:** If a download fails due to YouTube restrictions or age-verification (`ERROR: Sign in to confirm your age`), it silently logs it in `failed_downloads.txt` so you can retrieve it later.
+*   **📌 Permanent Failure Log Policy:** ailed_downloads.txt is intended to stay in GitHub history and should not be deleted, even if it looks messy.
 
 ---
 
