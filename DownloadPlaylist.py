@@ -35,9 +35,18 @@ def get_ffmpeg_location() -> Optional[str]:
     return None
 
 def get_cookies_args() -> list:
-    """Return browser-cookie args only when explicitly enabled."""
+    """Prefer cookie file auth; optionally allow browser cookies only when explicitly enabled."""
+    cookies_file = os.getenv("YT_COOKIES_FILE", "").strip()
+    if cookies_file and os.path.exists(cookies_file):
+        return ["--cookies", cookies_file]
+
     if os.getenv("YT_ENABLE_BROWSER_COOKIES", "").strip().lower() not in {"1", "true", "yes", "on"}:
         return []
+
+    browser = os.getenv("YT_COOKIES_FROM", "").strip()
+    if browser:
+        return ["--cookies-from-browser", browser]
+    return []
     browser = os.getenv("YT_COOKIES_FROM", "").strip()
     if browser:
         return ["--cookies-from-browser", browser]

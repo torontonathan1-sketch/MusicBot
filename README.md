@@ -108,3 +108,13 @@ Everything is automatically tagged and sorted into clean, year-less directories:
 📁 `d:\Music\Artist Name\Album Title\Song Name.mp3`
 
 Enjoy your premium offline music library! 🎧
+
+## Age-Restricted Tracks
+
+Preferred method: export YouTube cookies to a Netscape-format file and set:
+
+```env
+YT_COOKIES_FILE=D:\Music\cookies.txt
+```
+
+The bot will use `--cookies` automatically when the file exists. Browser-cookie mode remains optional via `YT_ENABLE_BROWSER_COOKIES=true`.
