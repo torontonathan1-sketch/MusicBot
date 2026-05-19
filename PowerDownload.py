@@ -348,101 +348,88 @@ def get_spotify_albums_api(client_id: str, client_secret: str, artist_name: str)
         return None
 
 
-def get_spotify_artist_albums(artist_id: str) -> list[Album]:
+def get_itunes_artist_albums(artist_name: str) -> list[Album]:
     """
-    Fetch artist albums via Spotify's public query API (no credentials needed).
-    Gets all album/single pages, deduplicates by base title, prioritizes Deluxe editions,
-    selects top 9 by popularity + newest within 1 year.
+    Fetch an artist's top albums via the Apple iTunes Search API.
+    Completely free, no API key, no account needed.
+    Returns albums ranked by real popularity (sales/chart data).
+    Uses iTunes track lookup for accurate tracklists.
     """
-    # Use Spotify public partner API — same endpoint the free web player uses
-    base_url = "https://api-partner.spotify.com/pathfinder/v1/query"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-    }
-
-    # Get anonymous access token by simulating a real browser session
+    log.info(f"Searching iTunes for artist: {artist_name!r}")
     try:
-        session = requests.Session()
-        session.headers.update(headers)
-        # Visit homepage first to pick up session cookies (sp_t, sp_landing etc.)
-        session.get("https://open.spotify.com/", timeout=10)
-        token_r = session.get(
-            "https://open.spotify.com/get_access_token?reason=transport&productType=web_player",
-            timeout=10
+        # Search for albums by this artist
+        r = requests.get(
+            "https://itunes.apple.com/search",
+            params={
+                "term": artist_name,
+                "entity": "album",
+                "attribute": "artistTerm",
+                "limit": 200,
+                "country": "us",
+            },
+            timeout=15
         )
-        if token_r.status_code != 200 or not token_r.text.strip().startswith("{"):
-            log.warning(f"Spotify token endpoint returned non-JSON (status {token_r.status_code}).")
+        if r.status_code != 200:
+            log.warning(f"iTunes search returned status {r.status_code}")
             return []
-        token_data = token_r.json()
-        access_token = token_data.get("accessToken")
-        if not access_token:
-            log.warning("Could not obtain anonymous Spotify token.")
-            return []
+        results = r.json().get("results", [])
     except Exception as e:
-        log.warning(f"Failed to get anonymous Spotify token: {e}")
+        log.warning(f"iTunes search failed: {e}")
         return []
 
-    auth_headers = {**headers, "Authorization": f"Bearer {access_token}"}
-
-    # Paginate through all albums for this artist using the official albums endpoint
-    all_album_items = []
-    offset = 0
-    limit = 50
-    while True:
-        try:
-            r = session.get(
-                f"https://api.spotify.com/v1/artists/{artist_id}/albums",
-                params={"limit": limit, "offset": offset, "include_groups": "album,single"},
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=10
-            )
-            if r.status_code != 200:
-                log.warning(f"Spotify albums endpoint returned {r.status_code}")
-                break
-            data = r.json()
-            items = data.get("items", [])
-            if not items:
-                break
-            all_album_items.extend(items)
-            if len(items) < limit:
-                break
-            offset += limit
-        except Exception as e:
-            log.warning(f"Error paginating Spotify albums: {e}")
-            break
-
-    if not all_album_items:
-        log.warning("Could not find initialState block in Spotify Artist page.")
+    if not results:
+        log.warning(f"iTunes found no albums for {artist_name!r}")
         return []
-        
-    # Parse all items into Album objects
+
+    # Filter to only albums by the correct artist (case-insensitive)
+    artist_lower = artist_name.lower()
     candidates_raw = []
-    for item in all_album_items:
-        name = item.get("name")
-        album_id = item.get("id")
-        if not name or not album_id:
+    for item in results:
+        if item.get("wrapperType") != "collection":
             continue
-        date_str = item.get("release_date", "")
-        year = int(date_str[:4]) if len(date_str) >= 4 and date_str[:4].isdigit() else None
-        popularity = item.get("popularity", 0)
-        a = Album(mbid=album_id, title=name, year=year, release_type=item.get("album_type", "album"), secondary_types=[])
-        a.popularity = popularity
+        item_artist = item.get("artistName", "").lower()
+        # Accept if artist name matches or is contained
+        if artist_lower not in item_artist and item_artist not in artist_lower:
+            continue
+        name = item.get("collectionName", "")
+        collection_id = item.get("collectionId")
+        track_count = item.get("trackCount", 0)
+        date_str = item.get("releaseDate", "")
+        year = int(date_str[:4]) if date_str and len(date_str) >= 4 and date_str[:4].isdigit() else None
+        # Skip obvious non-albums
+        if not name or not collection_id:
+            continue
+        a = Album(
+            mbid=str(collection_id),
+            title=name,
+            year=year,
+            release_type="Album",
+            secondary_types=[]
+        )
+        a.popularity = track_count  # use track count as a proxy; ordering in results = popularity
         candidates_raw.append(a)
 
-    # Look for the newest release within 1 year
+    if not candidates_raw:
+        log.warning(f"iTunes returned results but none matched artist {artist_name!r}")
+        return []
+
+    log.info(f"  → iTunes found {len(candidates_raw)} total releases for {artist_name!r}")
+
+    # Look for newest release within 1 year
     recent = [a for a in candidates_raw if a.year and a.year >= 2025]
     latest_parsed = None
     if recent:
-        recent.sort(key=lambda x: (x.year or 0, x.popularity), reverse=True)
+        # Pick most recent by year
+        recent.sort(key=lambda x: x.year or 0, reverse=True)
         latest_parsed = recent[0]
-        log.info(f"  → Found newest release within 1 year (Spotify): {latest_parsed.title} ({latest_parsed.year})")
+        log.info(f"  → Newest release within 1 year (iTunes): {latest_parsed.title} ({latest_parsed.year})")
 
     # Deduplicate by base name, prefer deluxe editions
-    def clean_album_name_for_dedup(name: str) -> str:
+    def clean_name(name: str) -> str:
         n = name.lower()
-        for keyword in ["deluxe", "expanded", "bonus", "complete", "special", "super", "tour edition", "repacked", "platinum"]:
-            n = n.replace(keyword, "")
+        for kw in ["deluxe", "expanded", "bonus", "complete", "special", "super",
+                   "tour edition", "repacked", "platinum", "remastered"]:
+            n = n.replace(kw, "")
         n = re.sub(r'[\(\)\[\]\-\:\,\.]', "", n)
         return " ".join(n.split())
 
@@ -450,63 +437,79 @@ def get_spotify_artist_albums(artist_id: str) -> list[Album]:
         n = name.lower()
         return any(k in n for k in ["deluxe", "expanded", "bonus", "complete", "special", "platinum"])
 
-    seen_cand_ids = {latest_parsed.mbid} if latest_parsed else set()
+    seen_ids = {latest_parsed.mbid} if latest_parsed else set()
     groups = {}
     for a in candidates_raw:
-        if a.mbid in seen_cand_ids:
+        if a.mbid in seen_ids:
             continue
-        base_name = clean_album_name_for_dedup(a.title)
-        if base_name not in groups:
-            groups[base_name] = []
-        groups[base_name].append(a)
+        base = clean_name(a.title)
+        groups.setdefault(base, []).append(a)
 
     representatives = []
-    for base_name, group_list in groups.items():
-        deluxe_editions = [a for a in group_list if is_deluxe(a.title)]
-        if deluxe_editions:
-            deluxe_editions.sort(key=lambda x: x.popularity, reverse=True)
-            representatives.append(deluxe_editions[0])
+    for base, group in groups.items():
+        deluxe = [a for a in group if is_deluxe(a.title)]
+        if deluxe:
+            # Prefer deluxe; iTunes result order already reflects popularity so use first
+            representatives.append(deluxe[0])
         else:
-            group_list.sort(key=lambda x: x.popularity, reverse=True)
-            representatives.append(group_list[0])
+            representatives.append(group[0])  # iTunes ordering = popularity rank
 
-    representatives.sort(key=lambda x: x.popularity, reverse=True)
+    # Keep iTunes result order (index in original results = popularity rank)
+    orig_order = {item.get("collectionId"): i for i, item in enumerate(results)}
+    representatives.sort(key=lambda a: orig_order.get(int(a.mbid), 9999))
 
-    # Keep fetching tracklists from ALL representatives until we have 10 valid ones
+    # Fetch tracklists from iTunes for each representative until we have 10 valid
     target_count = 9 if latest_parsed else 10
     populated = []
+
+    def fetch_itunes_tracks(collection_id: str) -> list[Track]:
+        """Fetch tracklist for an iTunes collection ID."""
+        r2 = requests.get(
+            "https://itunes.apple.com/lookup",
+            params={"id": collection_id, "entity": "song"},
+            timeout=15
+        )
+        if r2.status_code != 200:
+            return []
+        songs = [s for s in r2.json().get("results", []) if s.get("wrapperType") == "track"]
+        return [Track(number=s.get("trackNumber", i+1), title=s.get("trackName", "Unknown"), duration_ms=s.get("trackTimeMillis")) for i, s in enumerate(songs)]
+
     if latest_parsed:
         try:
-            tracks = get_spotify_album_tracklist(latest_parsed.mbid)
+            tracks = fetch_itunes_tracks(latest_parsed.mbid)
             latest_parsed.tracks = tracks
             if latest_parsed.track_count >= MIN_TRACKS:
                 log.info(f"  ✓ {latest_parsed.year or '????'} — {latest_parsed.title!r} ({latest_parsed.track_count} tracks)")
                 populated.append(latest_parsed)
             else:
-                log.info(f"  ✗ {latest_parsed.title!r} ({latest_parsed.track_count} tracks) — below MIN_TRACKS, skipping latest")
-                target_count = 10  # fill the slot
+                log.info(f"  ✗ {latest_parsed.title!r} ({latest_parsed.track_count} tracks) — below MIN_TRACKS, trying next")
+                target_count = 10
         except Exception as e:
-            log.error(f"  Could not fetch tracklist for latest {latest_parsed.title!r}: {e}")
+            log.error(f"  Could not fetch iTunes tracklist for latest: {e}")
             target_count = 10
 
-    log.info(f"Checking tracklists for all {len(representatives)} Spotify candidates until {target_count} valid found…")
+    log.info(f"Fetching tracklists for {len(representatives)} iTunes candidates until {target_count} valid found…")
+    valid = 0
     for album in representatives:
-        if len(populated) >= (target_count + (1 if latest_parsed and populated and populated[0].mbid == latest_parsed.mbid else 0)):
+        if valid >= target_count:
             break
         try:
-            tracks = get_spotify_album_tracklist(album.mbid)
+            tracks = fetch_itunes_tracks(album.mbid)
             album.tracks = tracks
             if album.track_count >= MIN_TRACKS:
                 log.info(f"  ✓ {album.year or '????'} — {album.title!r} ({album.track_count} tracks)")
                 populated.append(album)
+                valid += 1
             else:
                 log.info(f"  ✗ {album.title!r} ({album.track_count} tracks) — below MIN_TRACKS, trying next…")
         except Exception as e:
-            log.error(f"  Could not fetch tracklist for {album.title!r}: {e}")
+            log.error(f"  Could not fetch iTunes tracklist for {album.title!r}: {e}")
 
     populated.sort(key=lambda a: (a.year or 9999, a.title))
-    log.info(f"  Ready to download {len(populated)} Spotify albums.")
+    log.info(f"  Ready to download {len(populated)} iTunes albums.")
     return populated
+
+
 
 
 # ── MusicBrainz Credential-Free Fallback Helpers ───────────────────────────────
@@ -913,12 +916,10 @@ def process_artist(artist_name: str, total_bar):
     if client_id and client_secret:
         albums = get_spotify_albums_api(client_id, client_secret, artist_name)
         
-    # ── Tier 2: Unauthenticated Spotify Web Scraper ────────
+    # ── Tier 2: iTunes Search API (free, no key, real popularity) ─────────────
     if not albums:
-        artist_id = resolve_spotify_artist_id(artist_name)
-        if artist_id:
-            log.info("Attempting unauthenticated Spotify scraping fallback…")
-            albums = get_spotify_artist_albums(artist_id)
+        log.info("Attempting iTunes Search API fallback…")
+        albums = get_itunes_artist_albums(artist_name)
 
     # ── Tier 3: MusicBrainz Catalog Fallback ──────────────
     if not albums:
