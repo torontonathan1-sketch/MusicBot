@@ -54,7 +54,9 @@ def get_ffmpeg_location() -> Optional[str]:
     return None
 
 def get_cookies_args() -> list:
-    """Return --cookies-from-browser args if YT_COOKIES_FROM is set in .env."""
+    """Return browser-cookie args only when explicitly enabled."""
+    if os.getenv("YT_ENABLE_BROWSER_COOKIES", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return []
     browser = os.getenv("YT_COOKIES_FROM", "").strip()
     if browser:
         return ["--cookies-from-browser", browser]
@@ -770,6 +772,7 @@ def ytdlp_search_playlist(query: str, expected_tracks: int, artist: str, album: 
     search_url = f"ytsearchmusic5:{clean_q}"
     cmd = [
         YTDLP_PATH,
+        "--no-config-locations",
         "--flat-playlist",
         "--dump-json",
         "--no-warnings",
@@ -828,6 +831,7 @@ def download_album_playlist(
 
     cmd = [
         YTDLP_PATH,
+        "--no-config-locations",
         url,
         "--extract-audio",
         "--audio-format", "mp3",
@@ -893,6 +897,7 @@ def download_track_individually(
 
     cmd = [
         YTDLP_PATH,
+        "--no-config-locations",
         query,
         "--extract-audio",
         "--audio-format", "mp3",

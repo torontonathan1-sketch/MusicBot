@@ -35,7 +35,9 @@ def get_ffmpeg_location() -> Optional[str]:
     return None
 
 def get_cookies_args() -> list:
-    """Return --cookies-from-browser args if YT_COOKIES_FROM is set in .env."""
+    """Return browser-cookie args only when explicitly enabled."""
+    if os.getenv("YT_ENABLE_BROWSER_COOKIES", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return []
     browser = os.getenv("YT_COOKIES_FROM", "").strip()
     if browser:
         return ["--cookies-from-browser", browser]
@@ -209,6 +211,7 @@ def main():
         
         cmd = [
             "yt-dlp",
+            "--no-config-locations",
             search_query,
             "--default-search", "ytsearch",
             "--extract-audio",
