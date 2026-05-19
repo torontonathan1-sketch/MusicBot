@@ -167,6 +167,25 @@ def main():
     for i, track_query in enumerate(tracks_to_download):
         is_link = track_query.startswith("http")
         
+        # Smart skip check: If file already exists in playlist directory
+        if not is_link and len(tracks_to_download) > 1:
+            clean_pname = sanitize_filename(playlist_name)
+            target_dir = PLAYLIST_DIR / clean_pname
+            if target_dir.exists():
+                # Extract the track name part from "Artist - Track Name"
+                parts = track_query.split(" - ", 1)
+                track_name = parts[1] if len(parts) > 1 else track_query
+                track_clean = sanitize_filename(track_name).lower()
+                
+                exists = False
+                for f in target_dir.glob("*.mp3"):
+                    if track_clean in f.name.lower():
+                        exists = True
+                        break
+                if exists:
+                    print(f"⏭️ [{i+1}/{len(tracks_to_download)}] Already downloaded, skipping: {track_query}")
+                    continue
+
         if not is_link:
             print(f"\n🔍 [{i+1}/{len(tracks_to_download)}] Downloading: {track_query}")
             search_query = f"ytsearch1:{track_query}"
