@@ -381,22 +381,30 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
         log.warning(f"iTunes found no albums for {artist_name!r}")
         return []
 
-    # Filter to only albums by the correct artist (case-insensitive)
+    # Filter to only albums where the searched artist appears in the artistName
+    # This naturally handles collabs (e.g. "Drake & 21 Savage" matches "21 Savage")
     artist_lower = artist_name.lower()
+    # Build first-word of artist for partial matching (e.g. "21" from "21 Savage")
+    artist_words = set(artist_lower.split())
     candidates_raw = []
     for item in results:
         if item.get("wrapperType") != "collection":
             continue
         item_artist = item.get("artistName", "").lower()
-        # Accept if artist name matches or is contained
-        if artist_lower not in item_artist and item_artist not in artist_lower:
+        # Accept if any significant word of our artist name appears in the item's artist
+        # OR if the item artist appears inside our artist name (handles short names)
+        match = (
+            artist_lower in item_artist
+            or item_artist in artist_lower
+            or any(w in item_artist for w in artist_words if len(w) > 2)
+        )
+        if not match:
             continue
         name = item.get("collectionName", "")
         collection_id = item.get("collectionId")
         track_count = item.get("trackCount", 0)
         date_str = item.get("releaseDate", "")
         year = int(date_str[:4]) if date_str and len(date_str) >= 4 and date_str[:4].isdigit() else None
-        # Skip obvious non-albums
         if not name or not collection_id:
             continue
         a = Album(
@@ -406,7 +414,7 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
             release_type="Album",
             secondary_types=[]
         )
-        a.popularity = track_count  # use track count as a proxy; ordering in results = popularity
+        a.popularity = track_count
         candidates_raw.append(a)
 
     if not candidates_raw:
@@ -427,8 +435,11 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
     # Deduplicate by base name, prefer deluxe editions
     def clean_name(name: str) -> str:
         n = name.lower()
-        for kw in ["deluxe", "expanded", "bonus", "complete", "special", "super",
-                   "tour edition", "repacked", "platinum", "remastered"]:
+        for kw in ["deluxe edition", "bonus track version", "bonus tracks",
+                   "deluxe", "expanded", "bonus", "complete", "special", "super",
+                   "tour edition", "repacked", "platinum", "remastered",
+                   "anniversary edition", "collector's edition", "edition",
+                   "version", "international"]:
             n = n.replace(kw, "")
         n = re.sub(r'[\(\)\[\]\-\:\,\.]', "", n)
         return " ".join(n.split())
@@ -918,8 +929,13 @@ def process_artist(artist_name: str, total_bar):
         
     # ── Tier 2: iTunes Search API (free, no key, real popularity) ─────────────
     if not albums:
-        log.info("Attempting iTunes Search API fallback…")
-        albums = get_itunes_artist_albums(artist_name)
+        log.info("Attempting iTunes Search API…")
+        itunes_result = get_itunes_artist_albums(artist_name)
+        # Only use iTunes result if it has at least 3 albums — otherwise artist may not be on iTunes
+        if itunes_result and len(itunes_result) >= 3:
+            albums = itunes_result
+        elif itunes_result:
+            log.warning(f"iTunes only found {len(itunes_result)} album(s) for {artist_name!r} — may not be on iTunes, trying MusicBrainz")
 
     # ── Tier 3: MusicBrainz Catalog Fallback ──────────────
     if not albums:
