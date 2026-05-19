@@ -53,6 +53,13 @@ def get_ffmpeg_location() -> Optional[str]:
             return p
     return None
 
+def get_cookies_args() -> list:
+    """Return --cookies-from-browser args if YT_COOKIES_FROM is set in .env."""
+    browser = os.getenv("YT_COOKIES_FROM", "").strip()
+    if browser:
+        return ["--cookies-from-browser", browser]
+    return []
+
 LOG_FILE    = MUSIC_ROOT / "download.log"
 
 # MusicBrainz
@@ -829,6 +836,7 @@ def download_album_playlist(
     ffmpeg_loc = get_ffmpeg_location()
     if ffmpeg_loc:
         cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+    cmd.extend(get_cookies_args())
 
     cmd.extend([
         "--output", output_template,
@@ -893,6 +901,7 @@ def download_track_individually(
     ffmpeg_loc = get_ffmpeg_location()
     if ffmpeg_loc:
         cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+    cmd.extend(get_cookies_args())
 
     cmd.extend([
         "--output", str(output_path),

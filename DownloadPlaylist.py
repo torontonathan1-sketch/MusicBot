@@ -34,6 +34,13 @@ def get_ffmpeg_location() -> Optional[str]:
             return p
     return None
 
+def get_cookies_args() -> list:
+    """Return --cookies-from-browser args if YT_COOKIES_FROM is set in .env."""
+    browser = os.getenv("YT_COOKIES_FROM", "").strip()
+    if browser:
+        return ["--cookies-from-browser", browser]
+    return []
+
 def main():
     if len(sys.argv) < 2:
         print("Please provide a playlist URL.")
@@ -211,6 +218,7 @@ def main():
         ffmpeg_loc = get_ffmpeg_location()
         if ffmpeg_loc:
             cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+        cmd.extend(get_cookies_args())
 
         cmd.extend([
             "--output", output_template,
