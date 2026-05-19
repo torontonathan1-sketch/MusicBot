@@ -853,9 +853,7 @@ def download_album_playlist(
             f"-id3v2_version 3"
         ),
         "--yes-playlist",
-        "--ignore-errors",
-        "--quiet",
-        "--no-warnings",
+        "--ignore-errors",        "--no-warnings",
         "--trim-filenames", "100",
         "--sleep-interval", "2",
         "--max-sleep-interval", "5",
@@ -891,7 +889,7 @@ def download_track_individually(
     clean_title = track.title.replace('"', '').replace(':', ' ')
     clean_album = album.title.replace('"', '').replace(':', ' ')
     clean_artist = artist_name.replace('"', '').replace(':', ' ')
-    query = f"ytsearch1:{clean_artist} {clean_title} {clean_album}"
+    query = f"ytsearch5:{clean_artist} {clean_title} {clean_album}"
     safe_title = sanitize_filename(track.title)
     output_path = output_dir / f"{safe_title}.%(ext)s"
 
@@ -921,7 +919,6 @@ def download_track_individually(
         ),
         "--no-playlist",
         "--ignore-errors",
-        "--quiet",
         "--no-warnings",
         "--trim-filenames", "100",
         "--sleep-interval", "2",
@@ -938,21 +935,20 @@ def download_track_individually(
                 if safe_title.lower() in f.name.lower():
                     exists = True
                     break
-        
+
         if not exists:
             err_msg = "Download failed (no output file created)"
-            if res.stderr:
-                for line in res.stderr.splitlines():
-                    if "ERROR:" in line or "error" in line.lower():
-                        err_msg = line.strip()
-                        break
+            combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
+            for line in combined_output.splitlines():
+                if "ERROR:" in line or "error" in line.lower():
+                    err_msg = line.strip()
+                    break
             record_failed_download(artist_name, album.title, track.title, err_msg)
             return False
         return True
     except Exception as e:
         record_failed_download(artist_name, album.title, track.title, str(e))
         return False
-
 
 def album_already_downloaded(output_dir: Path, expected_count: int) -> bool:
     if not output_dir.exists():
