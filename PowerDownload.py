@@ -1048,6 +1048,18 @@ def main():
 
     if not artists: return
 
+    # Deduplicate while preserving original checklist order
+    seen_artists = set()
+    deduped_artists = []
+    for a in artists:
+        # Standardize matching name to prevent slight capitalization duplicates
+        a_clean = a.strip()
+        a_lower = a_clean.lower()
+        if a_lower not in seen_artists:
+            seen_artists.add(a_lower)
+            deduped_artists.append(a_clean)
+    artists = deduped_artists
+
     total_bar = tqdm(total=len(artists), desc="TOTAL PROGRESS", unit="artist")
 
     for i, artist in enumerate(artists):
