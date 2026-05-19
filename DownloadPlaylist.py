@@ -187,8 +187,8 @@ def main():
                     continue
 
         if not is_link:
-            print(f"\n🔍 [{i+1}/{len(tracks_to_download)}] Downloading: {track_query}")
-            search_query = f"ytsearch1:{track_query}"
+            clean_q = track_query.replace('"', '').replace(':', ' ')
+            search_query = f"ytsearch1:{clean_q}"
         else:
             print(f"\n🎥 [{i+1}/{len(tracks_to_download)}] Processing Link: {track_query}")
             search_query = track_query

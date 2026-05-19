@@ -759,7 +759,8 @@ def build_ytmusic_query(artist: str, album_title: str) -> str:
 
 
 def ytdlp_search_playlist(query: str, expected_tracks: int, artist: str, album: Album) -> Optional[str]:
-    search_url = f"ytsearchmusic5:{query}"
+    clean_q = query.replace('"', '').replace(':', ' ')
+    search_url = f"ytsearchmusic5:{clean_q}"
     cmd = [
         YTDLP_PATH,
         "--flat-playlist",
@@ -874,7 +875,11 @@ def download_track_individually(
     track: Track,
     output_dir: Path,
 ) -> bool:
-    query = f"ytsearch1:{artist_name} {track.title} {album.title}"
+    # Strip double quotes and replace colons with spaces so yt-dlp doesn't split query arguments
+    clean_title = track.title.replace('"', '').replace(':', ' ')
+    clean_album = album.title.replace('"', '').replace(':', ' ')
+    clean_artist = artist_name.replace('"', '').replace(':', ' ')
+    query = f"ytsearch1:{clean_artist} {clean_title} {clean_album}"
     safe_title = sanitize_filename(track.title)
     output_path = output_dir / f"{safe_title}.%(ext)s"
 
