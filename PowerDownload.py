@@ -931,8 +931,8 @@ def process_artist(artist_name: str, total_bar):
     if not albums:
         log.info("Attempting iTunes Search API…")
         itunes_result = get_itunes_artist_albums(artist_name)
-        # Only use iTunes result if it has at least 3 albums — otherwise artist may not be on iTunes
-        if itunes_result and len(itunes_result) >= 3:
+        # Only use iTunes result if it has at least 2 albums — otherwise artist may not be on iTunes
+        if itunes_result and len(itunes_result) >= 2:
             albums = itunes_result
         elif itunes_result:
             log.warning(f"iTunes only found {len(itunes_result)} album(s) for {artist_name!r} — may not be on iTunes, trying MusicBrainz")
