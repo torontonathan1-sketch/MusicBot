@@ -8,10 +8,31 @@ import dotenv
 # Load environment variables
 dotenv.load_dotenv(Path(__file__).parent.absolute() / ".env")
 
-
 def sanitize_filename(name: str) -> str:
     """Remove characters illegal in Windows filenames."""
     return re.sub(r'[<>:"/\\|?*]', "", name).strip()
+
+def get_ffmpeg_location() -> Optional[str]:
+    """Smart helper to find FFmpeg. If installed globally, returns None (allowing yt-dlp to find it automatically)."""
+    import shutil
+    from typing import Optional
+    try:
+        if shutil.which("ffmpeg") or shutil.which("ffmpeg.exe"):
+            return None
+    except:
+        pass
+
+    MUSIC_ROOT = Path(__file__).parent.absolute()
+    common_paths = [
+        r"C:\Users\Steve\.spotdl",
+        r"C:\Users\toron\.spotdl",
+        str(MUSIC_ROOT / "ffmpeg"),
+        str(MUSIC_ROOT / "ffmpeg" / "bin"),
+    ]
+    for p in common_paths:
+        if os.path.exists(p):
+            return p
+    return None
 
 def main():
     if len(sys.argv) < 2:
@@ -167,14 +188,19 @@ def main():
             "--extract-audio",
             "--audio-format", "mp3",
             "--audio-quality", "4",
-            "--ffmpeg-location", FFMPEG_PATH,
+        ]
+        ffmpeg_loc = get_ffmpeg_location()
+        if ffmpeg_loc:
+            cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+
+        cmd.extend([
             "--output", output_template,
             "--add-metadata",
             "--postprocessor-args", "ffmpeg:-id3v2_version 3",
             "--no-playlist",
             "--ignore-errors",
             "--trim-filenames", "100"
-        ]
+        ])
         subprocess.run(cmd)
 
     print(f"\n✅ Playlist processing complete! Check: {PLAYLIST_DIR.absolute()}")

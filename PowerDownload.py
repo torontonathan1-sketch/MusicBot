@@ -31,7 +31,28 @@ dotenv.load_dotenv(Path(__file__).parent.absolute() / ".env")
 
 MUSIC_ROOT = Path(__file__).parent.absolute()
 YTDLP_PATH = "yt-dlp"          
-FFMPEG_PATH = r"C:\Users\Steve\.spotdl" # Updated to your specific location
+def get_ffmpeg_location() -> Optional[str]:
+    """Smart helper to find FFmpeg. If installed globally, returns None (allowing yt-dlp to find it automatically)."""
+    # 1. Check if globally in system path
+    import shutil
+    try:
+        if shutil.which("ffmpeg") or shutil.which("ffmpeg.exe"):
+            return None
+    except:
+        pass
+
+    # 2. Check common custom folder fallbacks
+    common_paths = [
+        r"C:\Users\Steve\.spotdl",
+        r"C:\Users\toron\.spotdl",
+        str(MUSIC_ROOT / "ffmpeg"),
+        str(MUSIC_ROOT / "ffmpeg" / "bin"),
+    ]
+    for p in common_paths:
+        if os.path.exists(p):
+            return p
+    return None
+
 LOG_FILE    = MUSIC_ROOT / "download.log"
 
 # MusicBrainz
@@ -803,7 +824,12 @@ def download_album_playlist(
         "--extract-audio",
         "--audio-format", "mp3",
         "--audio-quality", "4",
-        "--ffmpeg-location", FFMPEG_PATH,
+    ]
+    ffmpeg_loc = get_ffmpeg_location()
+    if ffmpeg_loc:
+        cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+
+    cmd.extend([
         "--output", output_template,
         "--add-metadata",
         "--postprocessor-args", (
@@ -822,7 +848,7 @@ def download_album_playlist(
         "--max-sleep-interval", "5",
         "--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
         "--force-ipv4"
-    ]
+    ])
 
     try:
         subprocess.run(cmd, timeout=3600)
@@ -858,7 +884,12 @@ def download_track_individually(
         "--extract-audio",
         "--audio-format", "mp3",
         "--audio-quality", "4",
-        "--ffmpeg-location", FFMPEG_PATH,
+    ]
+    ffmpeg_loc = get_ffmpeg_location()
+    if ffmpeg_loc:
+        cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+
+    cmd.extend([
         "--output", str(output_path),
         "--add-metadata",
         "--postprocessor-args", (
@@ -877,7 +908,7 @@ def download_track_individually(
         "--sleep-interval", "2",
         "--max-sleep-interval", "5",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-    ]
+    ])
 
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)

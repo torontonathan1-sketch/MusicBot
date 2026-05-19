@@ -1,10 +1,12 @@
-# 🎵 Ultimate Notion & iTunes Music Bot 2.0 🚀
+# 🎵 Ultimate Notion & iTunes Music Bot 2.2 🚀
 
 An autonomous, premium music downloader designed to perfectly organize, download, and tag music discographies for your local library or offline MP3 players. It leverages the **iTunes Search API** (free & key-less) to query real popular catalogs, captures **the single newest release within the last 1 year**, fetches **Spotify playlists of any size**, and handles **Notion checklists** dynamically in the background!
 
 ---
 
 ## ✨ Features
+
+*   **⚡ Smart Skip & Auto-Fill:** The bot checks if a song file already exists in `/Artist/Album/Song.mp3` or if an album is already at least 85% downloaded. It will **instantly skip** existing files and **only download the missing songs/albums** you add! Downloads are lightning-fast and never duplicate.
 *   **🔥 Real Popularity Rankings:** Uses the Apple iTunes Search API (no credentials needed) to fetch the artist's real, iconic albums (e.g. *Parachutes*, *A Rush of Blood to the Head*, *X&Y* for Coldplay) instead of obscure bootlegs.
 *   **💿 Deluxe Album Prioritization:** Automatically identifies, prioritizes, and resolves Deluxe, Expanded, and Bonus editions, cleanly removing standard duplicates from the queue.
 *   **📅 Newest 1-Year cutoff:** Isolates the single newest album released within the last 365 days to keep your library completely up to date.
@@ -24,13 +26,22 @@ Follow these simple steps to set up and run the bot on Windows—no programming 
    ```powershell
    winget install Python.Python.3.12 ; Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
    ```
-3. Restart your PowerShell window so Windows registers the newly installed Python.
+3. **Restart your PowerShell window** so Windows registers the newly installed Python.
 
 ### Step 2: Install Bot Dependencies
 Navigate to the directory where the bot is located (e.g. `d:\Music` or wherever your folder is) and run:
 ```powershell
 pip install requests tqdm python-dotenv yt-dlp
 ```
+
+---
+
+## 📝 Background Requirements
+
+To run this bot, make sure you have:
+1.  **A Notion Account:** (Free) Used to manage your checklist. You will add artist names to a table inside Notion on your computer or your phone.
+2.  **PowerShell Console:** Opened in your bot folder (`d:\Music`) to paste execution commands.
+3.  **Active Internet Connection:** Used to query iTunes and fetch the audio streams from YouTube.
 
 ---
 
@@ -73,15 +84,17 @@ Sync your music download list directly from your Notion workspace!
 
 ## 🏃 How to Run the Bot
 
-### 1. The Main Bot (Notion Sync & Artists)
-Double-click `OrganizeLibrary.ps1` or run it in PowerShell:
+Open PowerShell in your bot directory (`d:\Music`) and copy-paste the exact commands below to run:
+
+### 1. Run the Main Bot (Notion Sync & Artists)
+To sync with Notion and download/auto-fill all missing albums and tracks, paste this command and press **Enter**:
 ```powershell
 .\OrganizeLibrary.ps1
 ```
-*   The bot will ask to sync with Notion, check your artist list, query iTunes/Spotify for their **Top 9 Albums + 1 Newest Release**, and download them automatically!
+*   The bot will ask to sync with Notion, scan your checklist, look up their **Top 9 Albums + 1 Newest Release**, check your local folder for existing files, and download **only the missing tracks** automatically!
 
-### 2. Spotify Playlist Downloader
-Double-click `DownloadPlaylist.ps1` or run it in PowerShell:
+### 2. Run the Playlist Downloader
+To download an entire Spotify playlist directly, paste this command and press **Enter**:
 ```powershell
 .\DownloadPlaylist.ps1
 ```
