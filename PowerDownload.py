@@ -915,6 +915,7 @@ def download_track_individually(
     album: Album,
     track: Track,
     output_dir: Path,
+    used_video_ids: Optional[set[str]] = None,
 ) -> bool:
     # Build resilient query variants for long classical titles and noisy punctuation
     clean_title = track.title.replace('"', '').replace(':', ' ')
@@ -922,7 +923,6 @@ def download_track_individually(
     clean_artist = artist_name.replace('"', '').replace(':', ' ')
 
     def simplify_title(title: str) -> str:
-        # Remove movement detail after colon and collapse punctuation-heavy fragments
         base = title.split(':', 1)[0].strip()
         base = re.sub(r'\b(op\.?|no\.?|nr\.?)\s*', '', base, flags=re.IGNORECASE)
         base = re.sub(r'[^\w\s]', ' ', base)
@@ -942,57 +942,87 @@ def download_track_individually(
     last_error = "Download failed (no output file created)"
 
     for query in queries:
-        cmd = [
-            YTDLP_PATH,
-            "--no-config-locations",
-            query,
-            "--extract-audio",
-            "--audio-format", "mp3",
-            "--audio-quality", "4",
-        ]
-        if ffmpeg_loc:
-            cmd.extend(["--ffmpeg-location", ffmpeg_loc])
-        cmd.extend(get_cookies_args())
-
-        cmd.extend([
-            "--output", str(output_path),
-            "--add-metadata",
-            "--postprocessor-args", (
-                f"ffmpeg:-metadata artist={artist_name!r} "
-                f"-metadata album_artist={artist_name!r} "
-                f"-metadata album={album.title!r} "
-                f"-metadata title={track.title!r} "
-                f"-metadata date={album.year or ''} "
-                f"-id3v2_version 3"
-            ),
-            "--no-playlist",
-            "--ignore-errors",
-            "--no-warnings",
-            "--trim-filenames", "100",
-            "--sleep-interval", "2",
-            "--max-sleep-interval", "5",
-            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-        ])
-
+        # Resolve candidate videos so we can avoid reusing one video for many tracks.
+        candidate_urls = []
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            exists = False
-            if output_dir.exists():
-                for f in output_dir.glob("*.mp3"):
-                    if safe_title.lower() in f.name.lower():
-                        exists = True
+            search_cmd = [
+                YTDLP_PATH,
+                "--no-config-locations",
+                "--dump-single-json",
+                "--default-search", "ytsearch",
+                query,
+            ]
+            search_res = subprocess.run(search_cmd, capture_output=True, text=True, timeout=60)
+            if search_res.returncode == 0 and search_res.stdout.strip():
+                payload = json.loads(search_res.stdout)
+                entries = payload.get("entries", []) if isinstance(payload, dict) else []
+                for entry in entries:
+                    video_id = entry.get("id")
+                    if not video_id:
+                        continue
+                    if used_video_ids is not None and video_id in used_video_ids:
+                        continue
+                    candidate_urls.append((video_id, f"https://www.youtube.com/watch?v={video_id}"))
+        except Exception:
+            candidate_urls = []
+
+        if not candidate_urls:
+            candidate_urls = [(None, query)]
+
+        for video_id, source in candidate_urls:
+            cmd = [
+                YTDLP_PATH,
+                "--no-config-locations",
+                source,
+                "--extract-audio",
+                "--audio-format", "mp3",
+                "--audio-quality", "4",
+            ]
+            if ffmpeg_loc:
+                cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+            cmd.extend(get_cookies_args())
+
+            cmd.extend([
+                "--output", str(output_path),
+                "--add-metadata",
+                "--postprocessor-args", (
+                    f"ffmpeg:-metadata artist={artist_name!r} "
+                    f"-metadata album_artist={artist_name!r} "
+                    f"-metadata album={album.title!r} "
+                    f"-metadata title={track.title!r} "
+                    f"-metadata date={album.year or ''} "
+                    f"-id3v2_version 3"
+                ),
+                "--no-playlist",
+                "--ignore-errors",
+                "--no-warnings",
+                "--trim-filenames", "100",
+                "--sleep-interval", "2",
+                "--max-sleep-interval", "5",
+                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+            ])
+
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                exists = False
+                if output_dir.exists():
+                    for f in output_dir.glob("*.mp3"):
+                        if safe_title.lower() in f.name.lower():
+                            exists = True
+                            break
+
+                if exists:
+                    if used_video_ids is not None and video_id:
+                        used_video_ids.add(video_id)
+                    return True
+
+                combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
+                for line in combined_output.splitlines():
+                    if "ERROR:" in line or "error" in line.lower():
+                        last_error = line.strip()
                         break
-
-            if exists:
-                return True
-
-            combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
-            for line in combined_output.splitlines():
-                if "ERROR:" in line or "error" in line.lower():
-                    last_error = line.strip()
-                    break
-        except Exception as e:
-            last_error = str(e)
+            except Exception as e:
+                last_error = str(e)
 
     record_failed_download(artist_name, album.title, track.title, last_error)
     return False
