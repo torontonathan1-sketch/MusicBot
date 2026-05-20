@@ -117,7 +117,15 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
 
 
 def pick_video_url(track_query: str, used_ids: set[str]) -> Optional[str]:
-    clean_q = track_query.replace('"', "").replace(":", " ")
+    # Normalize Unicode spacing and punctuation noise for more reliable searching.
+    clean_q = (
+        (track_query or "")
+        .replace("\u00A0", " ")
+        .replace("\u202F", " ")
+        .replace('"', "")
+        .replace(":", " ")
+    )
+    clean_q = re.sub(r"\s+", " ", clean_q).strip()
     search_query = f"ytsearch6:{clean_q}"
     cmd = [
         "yt-dlp",
@@ -128,7 +136,8 @@ def pick_video_url(track_query: str, used_ids: set[str]) -> Optional[str]:
         search_query,
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0 or not res.stdout.strip():
+    # yt-dlp may return nonzero while still printing usable JSON entries.
+    if not res.stdout.strip():
         return None
 
     try:
@@ -181,8 +190,17 @@ def main() -> None:
         else:
             source_url = pick_video_url(track_query, used_video_ids)
             if not source_url:
-                print(f"Could not resolve video for: {track_query}")
-                continue
+                # Last-resort fallback: direct query download path (don't skip the track).
+                fallback_q = (
+                    (track_query or "")
+                    .replace("\u00A0", " ")
+                    .replace("\u202F", " ")
+                    .replace('"', "")
+                    .replace(":", " ")
+                )
+                fallback_q = re.sub(r"\s+", " ", fallback_q).strip()
+                source_url = f"ytsearch1:{fallback_q}"
+                print(f"Resolver fallback for: {track_query}")
 
         clean_pname = sanitize_filename(playlist_name)
         output_template = str(playlist_dir / clean_pname / f"{i:03d} - %(title)s.%(ext)s")
@@ -190,6 +208,10 @@ def main() -> None:
         cmd = [
             "yt-dlp",
             "--no-config-locations",
+            "--extractor-retries",
+            "3",
+            "--retries",
+            "3",
             source_url,
             "--extract-audio",
             "--audio-format",
