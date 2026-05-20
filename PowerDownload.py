@@ -940,6 +940,38 @@ def download_track_individually(
 
     ffmpeg_loc = get_ffmpeg_location()
     last_error = "Download failed (no output file created)"
+    expected_sec = (track.duration_ms or 0) / 1000 if track.duration_ms else None
+
+    def norm_words(text: str) -> set[str]:
+        cleaned = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
+        return {w for w in cleaned.split() if len(w) > 2}
+
+    track_words = norm_words(track.title)
+    artist_words = norm_words(artist_name)
+
+    def candidate_passes_guard(entry: dict) -> bool:
+        # Guard 1: title overlap must be reasonable
+        cand_title = entry.get("title", "")
+        cand_words = norm_words(cand_title)
+        if track_words:
+            overlap = len(track_words & cand_words) / max(1, len(track_words))
+            if overlap < 0.35:
+                return False
+
+        # Guard 2: duration should be close when both are known
+        cand_duration = entry.get("duration")
+        if expected_sec and cand_duration:
+            if abs(float(cand_duration) - float(expected_sec)) > 25:
+                return False
+
+        # Soft artist check: if candidate has artist-like metadata, prefer matches
+        uploader_words = norm_words(entry.get("uploader", "")) | norm_words(entry.get("channel", ""))
+        if artist_words and uploader_words and not (artist_words & uploader_words):
+            # Don't hard-fail if title overlap is very strong.
+            if track_words and len(track_words & cand_words) / max(1, len(track_words)) < 0.6:
+                return False
+
+        return True
 
     for query in queries:
         # Resolve candidate videos so we can avoid reusing one video for many tracks.
@@ -961,6 +993,8 @@ def download_track_individually(
                     if not video_id:
                         continue
                     if used_video_ids is not None and video_id in used_video_ids:
+                        continue
+                    if not candidate_passes_guard(entry):
                         continue
                     candidate_urls.append((video_id, f"https://www.youtube.com/watch?v={video_id}"))
         except Exception:
