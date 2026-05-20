@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 import subprocess
 import sys
@@ -178,7 +178,7 @@ def main() -> None:
         if not is_link:
             print(f"\n[{i}/{len(tracks_to_download)}] Downloading: {track_query}")
             clean_q = track_query.replace('"', '').replace(':', ' ')
-            search_query = f"ytsearch1:{clean_q}"
+            search_query = f"ytsearch3:{clean_q}"
         else:
             print(f"\n[{i}/{len(tracks_to_download)}] Processing Link: {track_query}")
             search_query = track_query
@@ -186,7 +186,7 @@ def main() -> None:
         # Folder management
         if len(tracks_to_download) > 1:
             clean_pname = sanitize_filename(playlist_name)
-            output_template = str(playlist_dir / clean_pname / "%(title)s.%(ext)s")
+            output_template = str(playlist_dir / clean_pname / f"{i:03d} - %(title)s.%(ext)s")
         else:
             output_template = str(playlist_dir / "%(playlist|Unknown Playlist)s" / "%(playlist_index)02d - %(title)s.%(ext)s")
 
@@ -203,7 +203,7 @@ def main() -> None:
             "--postprocessor-args", "ffmpeg:-id3v2_version 3",
             "--no-playlist",
             "--ignore-errors",
-            "--trim-filenames", "100",
+            "--trim-filenames", "100",`r`n            "--no-overwrites",
         ]
 
         if ffmpeg_loc:
