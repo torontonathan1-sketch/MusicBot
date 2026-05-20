@@ -974,27 +974,14 @@ def album_already_downloaded(output_dir: Path, expected_count: int) -> bool:
 def process_artist(artist_name: str, total_bar):
     artist_dir = MUSIC_ROOT / sanitize_filename(artist_name)
 
-    albums = None
-    client_id = os.getenv("SPOTIFY_CLIENT_ID")
-    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
-    
-    # ── Tier 1: Official Spotify API Mode ───────────────────
-    if client_id and client_secret:
-        albums = get_spotify_albums_api(client_id, client_secret, artist_name)
-        
-    # ── Tier 2: iTunes Search API (free, no key, real popularity) ─────────────
-    if not albums:
-        log.info("Attempting iTunes Search API…")
-        itunes_result = get_itunes_artist_albums(artist_name)
-        # Only use iTunes result if it has at least 2 albums — otherwise artist may not be on iTunes
-        if itunes_result and len(itunes_result) >= 2:
-            albums = itunes_result
-        elif itunes_result:
-            log.warning(f"iTunes only found {len(itunes_result)} album(s) for {artist_name!r} — may not be on iTunes, trying MusicBrainz")
+    # iTunes-first only (Spotify removed), then MusicBrainz fallback
+    albums = get_itunes_artist_albums(artist_name)
+    if albums and len(albums) < 2:
+        log.warning(f"iTunes only found {len(albums)} album(s) for {artist_name!r}; trying MusicBrainz")
+        albums = None
 
-    # ── Tier 3: MusicBrainz Catalog Fallback ──────────────
     if not albums:
-        log.warning("Spotify methods unavailable or returned 0 albums. Querying MusicBrainz Fallback…")
+        log.warning("iTunes returned 0/low-confidence albums. Querying MusicBrainz fallback...")
         mbid = find_artist_mbid(artist_name)
         if mbid:
             albums = get_artist_albums_mb(mbid)
@@ -1019,10 +1006,10 @@ def process_artist(artist_name: str, total_bar):
                 if safe_title.lower() in f.name.lower():
                     exists = True
                     break
-            
+
             if not exists:
                 missing_tracks.append(track)
-        
+
         if not missing_tracks:
             album_bar.update(1)
             continue
@@ -1030,14 +1017,14 @@ def process_artist(artist_name: str, total_bar):
         # If missing more than 50%, use playlist download (faster)
         playlist_attempted = False
         if len(missing_tracks) > len(album.tracks) * 0.5:
-            query    = build_ytmusic_query(artist_name, album.title)
+            query = build_ytmusic_query(artist_name, album.title)
             playlist = ytdlp_search_playlist(query, album.track_count, artist_name, album)
             if playlist:
                 log.info(f"  → Found album playlist, starting bulk download: {playlist}")
                 download_album_playlist(playlist, artist_name, album, album_dir)
                 playlist_attempted = True
 
-        # Check for remaining gaps and download them individually (records precise errors like age verification!)
+        # Check for remaining gaps and download them individually
         still_missing = []
         for track in album.tracks:
             safe_title = sanitize_filename(track.title)
@@ -1054,11 +1041,10 @@ def process_artist(artist_name: str, total_bar):
                 log.info(f"  → Bulk download complete. Filling {len(still_missing)} remaining gaps individually...")
             for track in still_missing:
                 download_track_individually(artist_name, album, track, album_dir)
-        
-        album_bar.update(1)
-    
-    album_bar.close()
 
+        album_bar.update(1)
+
+    album_bar.close()
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("artists", nargs="*")
