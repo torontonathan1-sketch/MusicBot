@@ -894,70 +894,86 @@ def download_track_individually(
     track: Track,
     output_dir: Path,
 ) -> bool:
-    # Strip double quotes and replace colons with spaces so yt-dlp doesn't split query arguments
+    # Build resilient query variants for long classical titles and noisy punctuation
     clean_title = track.title.replace('"', '').replace(':', ' ')
     clean_album = album.title.replace('"', '').replace(':', ' ')
     clean_artist = artist_name.replace('"', '').replace(':', ' ')
-    query = f"ytsearch5:{clean_artist} {clean_title} {clean_album}"
+
+    def simplify_title(title: str) -> str:
+        # Remove movement detail after colon and collapse punctuation-heavy fragments
+        base = title.split(':', 1)[0].strip()
+        base = re.sub(r'\b(op\.?|no\.?|nr\.?)\s*', '', base, flags=re.IGNORECASE)
+        base = re.sub(r'[^\w\s]', ' ', base)
+        return ' '.join(base.split())
+
+    title_simple = simplify_title(track.title)
+    queries = [
+        f"ytsearch5:{clean_artist} {clean_title} {clean_album}",
+        f"ytsearch5:{clean_artist} {title_simple} {clean_album}",
+        f"ytsearch5:{clean_artist} {title_simple}",
+    ]
+
     safe_title = sanitize_filename(track.title)
     output_path = output_dir / f"{safe_title}.%(ext)s"
 
-    cmd = [
-        YTDLP_PATH,
-        "--no-config-locations",
-        query,
-        "--extract-audio",
-        "--audio-format", "mp3",
-        "--audio-quality", "4",
-    ]
     ffmpeg_loc = get_ffmpeg_location()
-    if ffmpeg_loc:
-        cmd.extend(["--ffmpeg-location", ffmpeg_loc])
-    cmd.extend(get_cookies_args())
+    last_error = "Download failed (no output file created)"
 
-    cmd.extend([
-        "--output", str(output_path),
-        "--add-metadata",
-        "--postprocessor-args", (
-            f"ffmpeg:-metadata artist={artist_name!r} "
-            f"-metadata album_artist={artist_name!r} "
-            f"-metadata album={album.title!r} "
-            f"-metadata title={track.title!r} "
-            f"-metadata date={album.year or ''} "
-            f"-id3v2_version 3"
-        ),
-        "--no-playlist",
-        "--ignore-errors",
-        "--no-warnings",
-        "--trim-filenames", "100",
-        "--sleep-interval", "2",
-        "--max-sleep-interval", "5",
-        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-    ])
+    for query in queries:
+        cmd = [
+            YTDLP_PATH,
+            "--no-config-locations",
+            query,
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality", "4",
+        ]
+        if ffmpeg_loc:
+            cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+        cmd.extend(get_cookies_args())
 
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        # Check if downloaded file exists (case-insensitive search in target directory)
-        exists = False
-        if output_dir.exists():
-            for f in output_dir.glob("*.mp3"):
-                if safe_title.lower() in f.name.lower():
-                    exists = True
-                    break
+        cmd.extend([
+            "--output", str(output_path),
+            "--add-metadata",
+            "--postprocessor-args", (
+                f"ffmpeg:-metadata artist={artist_name!r} "
+                f"-metadata album_artist={artist_name!r} "
+                f"-metadata album={album.title!r} "
+                f"-metadata title={track.title!r} "
+                f"-metadata date={album.year or ''} "
+                f"-id3v2_version 3"
+            ),
+            "--no-playlist",
+            "--ignore-errors",
+            "--no-warnings",
+            "--trim-filenames", "100",
+            "--sleep-interval", "2",
+            "--max-sleep-interval", "5",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        ])
 
-        if not exists:
-            err_msg = "Download failed (no output file created)"
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            exists = False
+            if output_dir.exists():
+                for f in output_dir.glob("*.mp3"):
+                    if safe_title.lower() in f.name.lower():
+                        exists = True
+                        break
+
+            if exists:
+                return True
+
             combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
             for line in combined_output.splitlines():
                 if "ERROR:" in line or "error" in line.lower():
-                    err_msg = line.strip()
+                    last_error = line.strip()
                     break
-            record_failed_download(artist_name, album.title, track.title, err_msg)
-            return False
-        return True
-    except Exception as e:
-        record_failed_download(artist_name, album.title, track.title, str(e))
-        return False
+        except Exception as e:
+            last_error = str(e)
+
+    record_failed_download(artist_name, album.title, track.title, last_error)
+    return False
 
 def album_already_downloaded(output_dir: Path, expected_count: int) -> bool:
     if not output_dir.exists():
