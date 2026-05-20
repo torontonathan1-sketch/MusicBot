@@ -325,7 +325,7 @@ def get_spotify_albums_api(client_id: str, client_secret: str, artist_name: str)
 
         def is_deluxe(name: str) -> bool:
             n = name.lower()
-            return any(k in n for k in ["deluxe", "expanded", "bonus", "complete", "special", "platinum"])
+            return any(k in n for k in ["full moon", "deluxe", "expanded", "bonus", "complete", "special", "platinum", "edition"])
 
         groups = {}
         for a in candidates:
@@ -485,7 +485,7 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
 
     def is_deluxe(name: str) -> bool:
         n = name.lower()
-        return any(k in n for k in ["deluxe", "expanded", "bonus", "complete", "special", "platinum"])
+        return any(k in n for k in ["full moon", "deluxe", "expanded", "bonus", "complete", "special", "platinum", "edition"])
 
     seen_ids = {latest_parsed.mbid} if latest_parsed else set()
     groups = {}
@@ -659,7 +659,7 @@ def get_artist_albums_mb(mbid: str) -> list[Album]:
 
     def is_deluxe(name: str) -> bool:
         n = name.lower()
-        return any(k in n for k in ["deluxe", "expanded", "bonus", "complete", "special", "platinum"])
+        return any(k in n for k in ["full moon", "deluxe", "expanded", "bonus", "complete", "special", "platinum", "edition"])
 
     groups = {}
     for a in candidates:
