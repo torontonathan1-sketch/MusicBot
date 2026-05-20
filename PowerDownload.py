@@ -878,15 +878,37 @@ def download_album_playlist(
         return 0
 
 
+def is_age_restriction_error(error: str) -> bool:
+    msg = (error or "").lower()
+    return (
+        "sign in to confirm your age" in msg
+        or "inappropriate for some users" in msg
+        or "age-restricted" in msg
+        or "age restricted" in msg
+    )
+
+
+def record_age_restricted_track(artist: str, album: str, track: str, error: str):
+    age_file = MUSIC_ROOT / "age_restricted_tracks.txt"
+    try:
+        with open(age_file, "a", encoding="utf-8") as f:
+            f.write(f"Artist: {artist} | Album: {album} | Track: {track} | Error: {error}\n")
+        log.warning(f"Recorded age-restricted track in age_restricted_tracks.txt: {track!r}")
+    except Exception as e:
+        log.error(f"Failed to write to age_restricted_tracks.txt: {e}")
+
+
 def record_failed_download(artist: str, album: str, track: str, error: str):
     failed_file = MUSIC_ROOT / "failed_downloads.txt"
     try:
         with open(failed_file, "a", encoding="utf-8") as f:
             f.write(f"Artist: {artist} | Album: {album} | Track: {track} | Error: {error}\n")
         log.warning(f"Recorded failed download in failed_downloads.txt: {track!r} ({error})")
+
+        if is_age_restriction_error(error):
+            record_age_restricted_track(artist, album, track, error)
     except Exception as e:
         log.error(f"Failed to write to failed_downloads.txt: {e}")
-
 
 def download_track_individually(
     artist_name: str,

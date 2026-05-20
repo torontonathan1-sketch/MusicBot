@@ -39,6 +39,13 @@ def get_ffmpeg_location() -> Optional[str]:
     return None
 
 
+
+def append_age_restricted_playlist_track(music_root: Path, playlist_name: str, track_query: str, error: str):
+    age_file = music_root / "age_restricted_tracks.txt"
+    with open(age_file, "a", encoding="utf-8") as f:
+        f.write(
+            f"Source: PlaylistDownloader | Playlist: {playlist_name} | Track: {track_query} | Error: {error}\n"
+        )
 def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
     playlist_id = url.split('/')[-1].split('?')[0]
     tracks_to_download: list[str] = []
@@ -204,7 +211,16 @@ def main() -> None:
         if ffmpeg_loc:
             cmd.extend(["--ffmpeg-location", ffmpeg_loc])
 
-        subprocess.run(cmd)
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
+        lower_out = combined_output.lower()
+        if (
+            "sign in to confirm your age" in lower_out
+            or "inappropriate for some users" in lower_out
+            or "age-restricted" in lower_out
+            or "age restricted" in lower_out
+        ):
+            append_age_restricted_playlist_track(music_root, playlist_name, track_query, combined_output.strip())
 
     print(f"Playlist processing complete! Check: {playlist_dir.absolute()}")
 
