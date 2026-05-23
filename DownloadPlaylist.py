@@ -39,6 +39,28 @@ def get_ffmpeg_location() -> Optional[str]:
     return None
 
 
+_warned_missing_cookies = False
+
+def get_cookies_args() -> list:
+    global _warned_missing_cookies
+    """Prefer cookie file auth; optionally allow browser cookies only when explicitly enabled."""
+    cookies_file = os.getenv("YT_COOKIES_FILE", "").strip()
+    if cookies_file:
+        if os.path.exists(cookies_file):
+            return ["--cookies", cookies_file]
+        elif not _warned_missing_cookies:
+            print(f"[WARNING] YT_COOKIES_FILE is configured but file not found: {cookies_file}")
+            print("[ACTION REQUIRED] To resolve: Export YouTube cookies to this file, or enable browser cookies in your .env.")
+            _warned_missing_cookies = True
+
+    if os.getenv("YT_ENABLE_BROWSER_COOKIES", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return []
+
+    browser = os.getenv("YT_COOKIES_FROM", "").strip()
+    if browser:
+        return ["--cookies-from-browser", browser]
+    return []
+
 
 def append_age_restricted_playlist_track(music_root: Path, playlist_name: str, track_query: str, error: str):
     age_file = music_root / "age_restricted_tracks.txt"
@@ -135,6 +157,7 @@ def pick_video_url(track_query: str, used_ids: set[str]) -> Optional[str]:
         "ytsearch",
         search_query,
     ]
+    cmd.extend(get_cookies_args())
     res = subprocess.run(cmd, capture_output=True, text=True)
     # yt-dlp may return nonzero while still printing usable JSON entries.
     if not res.stdout.strip():
@@ -147,6 +170,8 @@ def pick_video_url(track_query: str, used_ids: set[str]) -> Optional[str]:
 
     entries = data.get("entries", []) if isinstance(data, dict) else []
     for e in entries:
+        if not e or not isinstance(e, dict):
+            continue
         vid = e.get("id")
         if not vid or vid in used_ids:
             continue
@@ -233,16 +258,29 @@ def main() -> None:
         if ffmpeg_loc:
             cmd.extend(["--ffmpeg-location", ffmpeg_loc])
 
+        cmd.extend(get_cookies_args())
+
         res = subprocess.run(cmd, capture_output=True, text=True)
         combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
         lower_out = combined_output.lower()
+
+        if "could not copy chrome cookie database" in lower_out or "lockprofilecookiedatabase" in lower_out:
+            print("\n[ERROR] Chrome cookie database is locked because Chrome is currently running!")
+            print("[ACTION REQUIRED] To fix this: CLOSE Chrome completely and re-run this script, OR export your YouTube cookies to D:\\Music\\cookies.txt\n")
+
         if (
             "sign in to confirm your age" in lower_out
             or "inappropriate for some users" in lower_out
             or "age-restricted" in lower_out
             or "age restricted" in lower_out
+            or "sign in to confirm you’re not a bot" in lower_out
         ):
-            append_age_restricted_playlist_track(music_root, playlist_name, track_query, combined_output.strip())
+            extended_error = combined_output.strip()
+            if "could not copy chrome cookie database" in lower_out:
+                extended_error += "\n[Action Required] Chrome cookie database was locked (Chrome open). Close Chrome or use Netscape format cookies.txt."
+            elif "not a bot" in lower_out or "confirm your age" in lower_out:
+                extended_error += "\n[Action Required] YouTube anti-bot/age wall hit. Please configure cookies.txt to bypass."
+            append_age_restricted_playlist_track(music_root, playlist_name, track_query, extended_error)
 
     print(f"Playlist processing complete! Check: {playlist_dir.absolute()}")
 

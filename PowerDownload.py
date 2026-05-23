@@ -53,19 +53,23 @@ def get_ffmpeg_location() -> Optional[str]:
             return p
     return None
 
+_warned_missing_cookies = False
+
 def get_cookies_args() -> list:
+    global _warned_missing_cookies
     """Prefer cookie file auth; optionally allow browser cookies only when explicitly enabled."""
     cookies_file = os.getenv("YT_COOKIES_FILE", "").strip()
-    if cookies_file and os.path.exists(cookies_file):
-        return ["--cookies", cookies_file]
+    if cookies_file:
+        if os.path.exists(cookies_file):
+            return ["--cookies", cookies_file]
+        elif not _warned_missing_cookies:
+            log.warning(f"YT_COOKIES_FILE is configured but file not found: {cookies_file}")
+            log.warning("[ACTION REQUIRED] To resolve: Export YouTube cookies to this file, or enable browser cookies in your .env.")
+            _warned_missing_cookies = True
 
     if os.getenv("YT_ENABLE_BROWSER_COOKIES", "").strip().lower() not in {"1", "true", "yes", "on"}:
         return []
 
-    browser = os.getenv("YT_COOKIES_FROM", "").strip()
-    if browser:
-        return ["--cookies-from-browser", browser]
-    return []
     browser = os.getenv("YT_COOKIES_FROM", "").strip()
     if browser:
         return ["--cookies-from-browser", browser]
@@ -788,6 +792,7 @@ def ytdlp_search_playlist(query: str, expected_tracks: int, artist: str, album: 
         "--default-search", "ytsearchmusic",
         search_url,
     ]
+    cmd.extend(get_cookies_args())
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         lines = [l for l in result.stdout.strip().splitlines() if l]
@@ -799,6 +804,9 @@ def ytdlp_search_playlist(query: str, expected_tracks: int, artist: str, album: 
             try:
                 info = json.loads(line)
             except json.JSONDecodeError:
+                continue
+
+            if not info or not isinstance(info, dict):
                 continue
 
             playlist_count = info.get("playlist_count") or info.get("n_entries", 0)
@@ -965,10 +973,21 @@ def download_track_individually(
                 return True
 
             combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
+            
+            # Catch Chromium profile locks
+            if "could not copy chrome cookie database" in combined_output.lower() or "lockprofilecookiedatabase" in combined_output.lower():
+                log.error("[ERROR] Chrome cookie database is locked because Chrome is currently running!")
+                log.error("[ACTION REQUIRED] To fix this: CLOSE Chrome completely and re-run this script, OR export your YouTube cookies to D:\\Music\\cookies.txt")
+
             for line in combined_output.splitlines():
                 if "ERROR:" in line or "error" in line.lower():
                     last_error = line.strip()
                     break
+            
+            if "could not copy chrome cookie database" in combined_output.lower():
+                last_error += " [Action Required] Chrome cookie database was locked (Chrome open). Close Chrome or use Netscape format cookies.txt."
+            elif "not a bot" in combined_output.lower() or "confirm your age" in combined_output.lower():
+                last_error += " [Action Required] YouTube anti-bot/age wall hit. Please configure cookies.txt to bypass."
         except Exception as e:
             last_error = str(e)
 
