@@ -41,6 +41,14 @@ def parse_track_query(track_query: str) -> tuple[str, str]:
     return "", track_query.strip()
 
 
+def strip_version_noise(title: str) -> str:
+    t = normalize_text(title)
+    # Remove common edition/version noise for better resolver matching.
+    t = re.sub(r"\b(remaster(ed)?|remastered \d{2,4}|radio edit|mono|stereo|official (video|audio|lyric video)|visualizer|from .+)\b", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 def is_special_version(title: str) -> bool:
     t = normalize_text(title)
     return any(k in t for k in SPECIAL_VERSION_KEYWORDS)
@@ -191,35 +199,79 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
 
 
 def pick_video_url(track_query: str, blocked_ids: set[str]) -> tuple[Optional[str], Optional[str]]:
+    artist, title = parse_track_query(track_query)
     clean_q = normalize_text(track_query).replace('"', "").replace(":", " ")
     clean_q = re.sub(r"\s+", " ", clean_q).strip()
-    search_query = f"ytsearch6:{clean_q}"
-    cmd = [
-        "yt-dlp",
-        "--no-config-locations",
-        "--dump-single-json",
-        "--default-search",
-        "ytsearch",
-        search_query,
+
+    queries = [
+        f"{artist} {title} official audio".strip(),
+        f"{artist} {strip_version_noise(title)} audio".strip(),
+        clean_q,
     ]
-    cmd.extend(get_cookies_args())
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if not res.stdout.strip():
-        return None, None
 
-    try:
-        data = json.loads(res.stdout)
-    except Exception:
-        return None, None
+    expected_tokens = token_set(f"{artist} {strip_version_noise(title)}")
+    if not expected_tokens:
+        expected_tokens = token_set(clean_q)
 
-    entries = data.get("entries", []) if isinstance(data, dict) else []
-    for e in entries:
-        if not e or not isinstance(e, dict):
+    best_url = None
+    best_vid = None
+    best_score = -1.0
+
+    for q in queries:
+        if not q:
             continue
-        vid = e.get("id")
-        if not vid or vid in blocked_ids:
+        search_query = f"ytsearch8:{q}"
+        cmd = [
+            "yt-dlp",
+            "--no-config-locations",
+            "--dump-single-json",
+            "--default-search",
+            "ytsearch",
+            search_query,
+        ]
+        cmd.extend(get_cookies_args())
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if not res.stdout.strip():
             continue
-        return f"https://www.youtube.com/watch?v={vid}", vid
+
+        try:
+            data = json.loads(res.stdout)
+        except Exception:
+            continue
+
+        entries = data.get("entries", []) if isinstance(data, dict) else []
+        for e in entries:
+            if not e or not isinstance(e, dict):
+                continue
+            vid = e.get("id")
+            if not vid or vid in blocked_ids:
+                continue
+            cand_title = e.get("title") or ""
+            cand_tokens = token_set(strip_version_noise(cand_title))
+            if not cand_tokens:
+                continue
+
+            overlap = len(expected_tokens & cand_tokens) / max(1, len(expected_tokens))
+            score = overlap
+            # Prefer music-oriented uploads over obvious live/covers for normal tracks.
+            lowered = normalize_text(cand_title)
+            if "official audio" in lowered:
+                score += 0.12
+            if "topic" in normalize_text(str(e.get("channel") or "")):
+                score += 0.08
+            if not is_special_version(title):
+                if "live" in lowered:
+                    score -= 0.2
+                if "cover" in lowered:
+                    score -= 0.2
+
+            if score > best_score:
+                best_score = score
+                best_url = f"https://www.youtube.com/watch?v={vid}"
+                best_vid = vid
+
+    if best_score >= 0.35:
+        return best_url, best_vid
     return None, None
 
 
