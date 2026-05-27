@@ -324,6 +324,15 @@ def get_spotify_user_token(music_root: Path) -> Optional[str]:
     return None
 
 
+def clear_spotify_user_token(music_root: Path) -> None:
+    token_file = music_root / "spotify_user_token.json"
+    try:
+        if token_file.exists():
+            token_file.unlink()
+    except Exception:
+        pass
+
+
 def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
     playlist_id = url.split('/')[-1].split('?')[0]
     tracks_to_download: list[str] = []
@@ -335,7 +344,9 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
     music_root = Path(__file__).parent.absolute()
 
     user_access_token = get_spotify_user_token(music_root)
-    if user_access_token:
+    user_attempts = 0
+    while user_access_token and user_attempts < 2 and not api_success:
+        user_attempts += 1
         print("Spotify user token detected. Fetching full playlist with user permissions...")
         try:
             meta_url = f"https://api.spotify.com/v1/playlists/{playlist_id}"
@@ -343,13 +354,17 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
             print(f"Spotify user meta status: {r_meta.status_code}")
             if r_meta.status_code == 200:
                 playlist_name = r_meta.json().get("name", "Unknown Playlist")
-                tracks_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks?limit=100&additional_types=track,episode&market=from_token"
+                # Keep this endpoint conservative; some tokens return 403 with market=from_token.
+                tracks_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks?limit=100"
                 page = 0
+                got_403 = False
                 while tracks_url:
                     page += 1
                     r_tracks = spotify_api_get(tracks_url, user_access_token)
                     print(f"Spotify user tracks page {page} status: {r_tracks.status_code}")
                     if r_tracks.status_code != 200:
+                        if r_tracks.status_code == 403:
+                            got_403 = True
                         break
                     tracks_data = r_tracks.json()
                     parsed_tracks = parse_spotify_playlist_items(tracks_data.get("items", []))
@@ -359,10 +374,16 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
                 api_success = len(tracks_to_download) > 0
                 if not api_success:
                     print("Spotify user-token API returned 0 tracks. Trying app/public fallbacks...")
+                if got_403 and user_attempts == 1:
+                    print("Spotify tracks endpoint returned 403. Clearing cached token and retrying fresh login...")
+                    clear_spotify_user_token(music_root)
+                    user_access_token = get_spotify_user_token(music_root)
+                    continue
             else:
                 print(f"Spotify user playlist access failed: {r_meta.text[:250]}")
         except Exception as e:
             print(f"Spotify user-token fetch failed: {e}")
+        break
 
     if (not api_success) and client_id and client_secret:
         print("Spotify API credentials detected. Fetching entire playlist via Spotify API...")
