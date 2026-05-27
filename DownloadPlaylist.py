@@ -353,7 +353,12 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
             r_meta = spotify_api_get(meta_url, user_access_token)
             print(f"Spotify user meta status: {r_meta.status_code}")
             if r_meta.status_code == 200:
-                playlist_name = r_meta.json().get("name", "Unknown Playlist")
+                meta_json = r_meta.json()
+                playlist_name = meta_json.get("name", "Unknown Playlist")
+                embedded_tracks = parse_spotify_playlist_items(meta_json.get("tracks", {}).get("items", []))
+                if embedded_tracks:
+                    tracks_to_download.extend(embedded_tracks)
+                    print(f"Spotify user embedded tracks parsed: {len(embedded_tracks)}")
                 # Keep this endpoint conservative; some tokens return 403 with market=from_token.
                 tracks_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks?limit=100"
                 page = 0
@@ -365,10 +370,13 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
                     if r_tracks.status_code != 200:
                         if r_tracks.status_code == 403:
                             got_403 = True
+                            print(f"Spotify user tracks 403 body: {(r_tracks.text or '')[:300]}")
                         break
                     tracks_data = r_tracks.json()
                     parsed_tracks = parse_spotify_playlist_items(tracks_data.get("items", []))
-                    tracks_to_download.extend(parsed_tracks)
+                    for t in parsed_tracks:
+                        if t not in tracks_to_download:
+                            tracks_to_download.append(t)
                     print(f"Spotify user tracks page {page} items parsed: {len(parsed_tracks)}")
                     tracks_url = tracks_data.get("next")
                 api_success = len(tracks_to_download) > 0
