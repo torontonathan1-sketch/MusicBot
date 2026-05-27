@@ -29,4 +29,5 @@ scratch_spotify.py
 # Exclude YouTube cookies & logs
 cookies.txt
 age_restricted_tracks.txt
+spotify_user_token.json
 

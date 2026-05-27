@@ -513,7 +513,8 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
     representatives.sort(key=lambda a: orig_order.get(int(a.mbid), 9999))
 
     # Fetch tracklists from iTunes for each representative until we have 10 valid
-    target_count = 9 if latest_parsed else 10
+    # Keep a buffer so post-tracklist dedupe can still leave us with ~10 albums.
+    target_count = 11 if latest_parsed else 10
     populated = []
 
     def fetch_itunes_tracks(collection_id: str) -> list[Track]:
@@ -585,7 +586,11 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
             return 0.0
         return len(a & b) / max(1, min(len(a), len(b)))
 
-    # Second-pass dedupe: if similarly named albums share most tracks, keep the bigger edition.
+    def is_deluxe_name(name: str) -> bool:
+        n = name.lower()
+        return any(k in n for k in ["deluxe", "expanded", "bonus", "edition", "full moon", "anniversary"])
+
+    # Second-pass dedupe: if similarly named albums share most tracks, merge missing songs into one kept album.
     by_name: dict[str, list[Album]] = {}
     for a in populated:
         by_name.setdefault(canonical_album_name(a.title), []).append(a)
@@ -596,19 +601,31 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
             collapsed.append(group[0])
             continue
 
-        # Prefer the release with the largest tracklist when overlap is high.
-        group_sorted = sorted(group, key=lambda x: x.track_count, reverse=True)
-        kept = []
-        for candidate in group_sorted:
+        # Prefer base/original title when possible; we'll merge missing songs from larger variants into it.
+        group_sorted = sorted(group, key=lambda x: x.track_count)
+        base_candidates = [a for a in group_sorted if not is_deluxe_name(a.title)]
+        base = base_candidates[0] if base_candidates else group_sorted[0]
+        base_sig = track_signature(base)
+        merged_tracks = list(base.tracks)
+
+        for candidate in sorted(group, key=lambda x: x.track_count, reverse=True):
+            if candidate is base:
+                continue
             cand_sig = track_signature(candidate)
-            duplicate = False
-            for existing in kept:
-                if overlap_ratio(cand_sig, track_signature(existing)) >= 0.70:
-                    duplicate = True
-                    break
-            if not duplicate:
-                kept.append(candidate)
-        collapsed.extend(kept)
+            if overlap_ratio(base_sig, cand_sig) < 0.70:
+                # Distinct edition/album, keep separately.
+                collapsed.append(candidate)
+                continue
+            # Same album family: merge only missing tracks into base, then drop candidate.
+            existing_norm = {re.sub(r"[^\w\s]", " ", (t.title or "").lower()).strip() for t in merged_tracks}
+            for t in candidate.tracks:
+                norm = re.sub(r"[^\w\s]", " ", (t.title or "").lower()).strip()
+                if norm and norm not in existing_norm:
+                    merged_tracks.append(t)
+                    existing_norm.add(norm)
+
+        base.tracks = merged_tracks
+        collapsed.append(base)
 
     populated = collapsed
     populated.sort(key=lambda a: (a.year or 9999, a.title))
@@ -1186,6 +1203,17 @@ def main():
 
     if not artists: return
 
+    progress_file = MUSIC_ROOT / "artist_progress.json"
+    completed_artists_lower = set()
+    if progress_file.exists():
+        try:
+            pdata = json.loads(progress_file.read_text(encoding="utf-8"))
+            completed_artists_lower = {a.lower() for a in pdata.get("completed_artists", []) if isinstance(a, str)}
+            if completed_artists_lower:
+                log.info(f"Loaded resume state: {len(completed_artists_lower)} completed artists.")
+        except Exception as e:
+            log.warning(f"Could not read progress file {progress_file}: {e}")
+
     # Deduplicate while preserving original checklist order
     seen_artists = set()
     deduped_artists = []
@@ -1197,12 +1225,19 @@ def main():
             seen_artists.add(a_lower)
             deduped_artists.append(a_clean)
     artists = deduped_artists
+    remaining_artists = [a for a in artists if a.lower() not in completed_artists_lower]
+    skipped_count = len(artists) - len(remaining_artists)
+    if skipped_count:
+        log.info(f"Resume active: skipping {skipped_count} already completed artists.")
+    artists = remaining_artists
 
     total_bar = tqdm(total=len(artists), desc="TOTAL PROGRESS", unit="artist")
 
     for i, artist in enumerate(artists):
+        completed_ok = False
         try:
             process_artist(artist, total_bar)
+            completed_ok = True
         except Exception as e:
             log.error(f"Error: {e}")
             
@@ -1221,6 +1256,22 @@ def main():
                         total_bar.refresh()
             except Exception as se:
                 log.error(f"Failed to auto-sync Notion: {se}")
+
+        if completed_ok:
+            completed_artists_lower.add(artist.lower())
+            try:
+                progress_file.write_text(
+                    json.dumps(
+                        {
+                            "completed_artists": sorted(completed_artists_lower),
+                            "updated_at": datetime.now().isoformat(),
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+            except Exception as pe:
+                log.warning(f"Could not update progress file: {pe}")
 
         total_bar.update(1)
 

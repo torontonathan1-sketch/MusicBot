@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -131,6 +132,65 @@ def append_age_restricted_playlist_track(music_root: Path, playlist_name: str, t
         )
 
 
+def parse_spotify_playlist_items(items: list) -> list[str]:
+    tracks: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        t = item.get("track")
+        if not t and item.get("episode"):
+            t = item.get("episode")
+        if not t:
+            continue
+        name = t.get("name") or t.get("title")
+        artists_list = t.get("artists") or []
+        artist = "Unknown"
+        if artists_list and isinstance(artists_list, list):
+            artist = artists_list[0].get("name", "Unknown")
+        elif t.get("show", {}).get("name"):
+            artist = t.get("show", {}).get("name")
+        if name:
+            tracks.append(f"{artist} - {name}")
+    return tracks
+
+
+def spotify_api_get(url: str, token: str) -> requests.Response:
+    return requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+
+
+def refresh_spotify_user_token(token_file: Path, client_id: str, client_secret: str, refresh_token: str) -> Optional[str]:
+    try:
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+        r = requests.post("https://accounts.spotify.com/api/token", data=payload, timeout=15)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        access_token = (data.get("access_token") or "").strip()
+        if not access_token:
+            return None
+        expires_in = int(data.get("expires_in", 3600))
+        new_refresh = (data.get("refresh_token") or refresh_token).strip()
+        token_file.write_text(
+            json.dumps(
+                {
+                    "access_token": access_token,
+                    "refresh_token": new_refresh,
+                    "expires_at": int(time.time()) + max(60, expires_in - 30),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return access_token
+    except Exception:
+        return None
+
+
 def get_spotify_user_token(music_root: Path) -> Optional[str]:
     """Get a user-authorized Spotify token for private/full playlist access."""
     token_file = music_root / "spotify_user_token.json"
@@ -146,6 +206,15 @@ def get_spotify_user_token(music_root: Path) -> Optional[str]:
         try:
             data = json.loads(token_file.read_text(encoding="utf-8"))
             cached = (data.get("access_token") or "").strip()
+            refresh = (data.get("refresh_token") or "").strip()
+            expires_at = int(data.get("expires_at", 0) or 0)
+            if cached and expires_at and int(time.time()) < expires_at:
+                return cached
+            if refresh and client_id and client_secret:
+                refreshed = refresh_spotify_user_token(token_file, client_id, client_secret, refresh)
+                if refreshed:
+                    print("Refreshed Spotify user token.")
+                    return refreshed
             if cached:
                 return cached
         except Exception:
@@ -234,8 +303,20 @@ def get_spotify_user_token(music_root: Path) -> Optional[str]:
             return None
         token_data = token_resp.json()
         access_token = (token_data.get("access_token") or "").strip()
+        refresh_token = (token_data.get("refresh_token") or "").strip()
+        expires_in = int(token_data.get("expires_in", 3600))
         if access_token:
-            token_file.write_text(json.dumps({"access_token": access_token}, indent=2), encoding="utf-8")
+            token_file.write_text(
+                json.dumps(
+                    {
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                        "expires_at": int(time.time()) + max(60, expires_in - 30),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
             print(f"Saved Spotify user token to: {token_file}")
             return access_token
     except Exception as e:
@@ -257,29 +338,29 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
     if user_access_token:
         print("Spotify user token detected. Fetching full playlist with user permissions...")
         try:
-            headers = {"Authorization": f"Bearer {user_access_token}"}
             meta_url = f"https://api.spotify.com/v1/playlists/{playlist_id}"
-            r_meta = requests.get(meta_url, headers=headers, timeout=10)
+            r_meta = spotify_api_get(meta_url, user_access_token)
+            print(f"Spotify user meta status: {r_meta.status_code}")
             if r_meta.status_code == 200:
                 playlist_name = r_meta.json().get("name", "Unknown Playlist")
-                tracks_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks?limit=100"
+                tracks_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks?limit=100&additional_types=track,episode&market=from_token"
+                page = 0
                 while tracks_url:
-                    r_tracks = requests.get(tracks_url, headers=headers, timeout=10)
+                    page += 1
+                    r_tracks = spotify_api_get(tracks_url, user_access_token)
+                    print(f"Spotify user tracks page {page} status: {r_tracks.status_code}")
                     if r_tracks.status_code != 200:
                         break
                     tracks_data = r_tracks.json()
-                    for item in tracks_data.get("items", []):
-                        t = item.get("track")
-                        if not t:
-                            continue
-                        name = t.get("name")
-                        artist = t.get("artists", [{}])[0].get("name", "Unknown")
-                        if name:
-                            tracks_to_download.append(f"{artist} - {name}")
+                    parsed_tracks = parse_spotify_playlist_items(tracks_data.get("items", []))
+                    tracks_to_download.extend(parsed_tracks)
+                    print(f"Spotify user tracks page {page} items parsed: {len(parsed_tracks)}")
                     tracks_url = tracks_data.get("next")
                 api_success = len(tracks_to_download) > 0
                 if not api_success:
                     print("Spotify user-token API returned 0 tracks. Trying app/public fallbacks...")
+            else:
+                print(f"Spotify user playlist access failed: {r_meta.text[:250]}")
         except Exception as e:
             print(f"Spotify user-token fetch failed: {e}")
 
@@ -302,20 +383,13 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
                 r_meta = requests.get(meta_url, headers=headers, timeout=10)
                 if r_meta.status_code == 200:
                     playlist_name = r_meta.json().get("name", "Unknown Playlist")
-                    tracks_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+                    tracks_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks?limit=100&additional_types=track,episode"
                     while tracks_url:
                         r_tracks = requests.get(tracks_url, headers=headers, timeout=10)
                         if r_tracks.status_code != 200:
                             break
                         tracks_data = r_tracks.json()
-                        for item in tracks_data.get("items", []):
-                            t = item.get("track")
-                            if not t:
-                                continue
-                            name = t.get("name")
-                            artist = t.get("artists", [{}])[0].get("name", "Unknown")
-                            if name:
-                                tracks_to_download.append(f"{artist} - {name}")
+                        tracks_to_download.extend(parse_spotify_playlist_items(tracks_data.get("items", [])))
                         tracks_url = tracks_data.get("next")
                     # Only treat API path as successful when it actually yields tracks.
                     api_success = len(tracks_to_download) > 0
