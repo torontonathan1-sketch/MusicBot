@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -165,21 +166,55 @@ def get_spotify_user_token(music_root: Path) -> Optional[str]:
             "show_dialog": "true",
         }
     )
-    print("\nOpen this URL and approve access:")
-    print(auth_url)
+    code: Optional[str] = None
     try:
-        webbrowser.open(auth_url)
+        parsed_redirect = urlparse(redirect_uri)
+        host = parsed_redirect.hostname or "127.0.0.1"
+        port = parsed_redirect.port or 8888
+        callback_path = parsed_redirect.path or "/callback"
+
+        class SpotifyCallbackHandler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                nonlocal code
+                parsed = urlparse(self.path)
+                if parsed.path != callback_path:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                code = parse_qs(parsed.query).get("code", [None])[0]
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(
+                    b"<html><body><h2>Spotify auth complete.</h2><p>You can close this tab and return to the bot.</p></body></html>"
+                )
+
+            def log_message(self, format, *args):  # noqa: A003
+                return
+
+        server = HTTPServer((host, port), SpotifyCallbackHandler)
+        server.timeout = 120
+        print("\nOpen this URL and approve access:")
+        print(auth_url)
+        print(f"Waiting for Spotify callback on {host}:{port}{callback_path} ...")
+        try:
+            webbrowser.open(auth_url)
+        except Exception:
+            pass
+        server.handle_request()
+        server.server_close()
     except Exception:
-        pass
+        code = None
 
-    redirected = input("Paste the full redirect URL here (or press Enter to skip): ").strip()
-    if not redirected:
-        return None
-
-    try:
+    if not code:
+        redirected = input("Auto-capture failed. Paste the full redirect URL here (or press Enter to skip): ").strip()
+        if not redirected:
+            return None
         code = parse_qs(urlparse(redirected).query).get("code", [None])[0]
         if not code:
             return None
+
+    try:
         if not client_secret:
             print("SPOTIFY_CLIENT_SECRET missing in .env; cannot exchange auth code.")
             return None
