@@ -4,6 +4,29 @@ An autonomous, premium music downloader designed to perfectly organize, download
 
 ---
 
+## Version Map
+
+Short labels for tagged releases so you can understand each version quickly.
+
+- `v1.0` - Core Release
+- `v2.0` - Query Fix
+- `v3.0` - Cookie Hardening
+- `v4.0` - Library Audit
+- `v5.0` - Playlist Scaling
+- `v6.0` - Multi Tier
+- `v7.0` - Fallback Fix
+- `v8.0` - iTunes Switch
+- `v8.1` - Threshold Tuning
+- `v8.2` - README Refresh
+- `v8.3` - FFmpeg Detection
+- `v8.4` - Artist Dedupe
+- `v8.5` - Smart Skip
+- `v8.6` - Query Sanitize
+- `v8.7` - Cookie Toggle
+
+Tip: Newer non-tagged commits are continuous fixes on top of `v8.7` in the `versions` branch.
+
+---
 ## ✨ Features
 
 *   **⚡ Smart Skip & Auto-Fill:** The bot checks if a song file already exists in `/Artist/Album/Song.mp3` or if an album is already at least 85% downloaded. It will **instantly skip** existing files and **only download the missing songs/albums** you add! Downloads are lightning-fast and never duplicate.
@@ -17,6 +40,29 @@ An autonomous, premium music downloader designed to perfectly organize, download
 
 ---
 
+## Version Map
+
+Short labels for tagged releases so you can understand each version quickly.
+
+- `v1.0` - Core Release
+- `v2.0` - Query Fix
+- `v3.0` - Cookie Hardening
+- `v4.0` - Library Audit
+- `v5.0` - Playlist Scaling
+- `v6.0` - Multi Tier
+- `v7.0` - Fallback Fix
+- `v8.0` - iTunes Switch
+- `v8.1` - Threshold Tuning
+- `v8.2` - README Refresh
+- `v8.3` - FFmpeg Detection
+- `v8.4` - Artist Dedupe
+- `v8.5` - Smart Skip
+- `v8.6` - Query Sanitize
+- `v8.7` - Cookie Toggle
+
+Tip: Newer non-tagged commits are continuous fixes on top of `v8.7` in the `versions` branch.
+
+---
 ## 🛠️ Step-by-Step Setup (For Complete Beginners)
 
 Follow these simple steps to set up and run the bot on Windows—no programming experience required!
@@ -37,6 +83,29 @@ pip install requests tqdm python-dotenv yt-dlp
 
 ---
 
+## Version Map
+
+Short labels for tagged releases so you can understand each version quickly.
+
+- `v1.0` - Core Release
+- `v2.0` - Query Fix
+- `v3.0` - Cookie Hardening
+- `v4.0` - Library Audit
+- `v5.0` - Playlist Scaling
+- `v6.0` - Multi Tier
+- `v7.0` - Fallback Fix
+- `v8.0` - iTunes Switch
+- `v8.1` - Threshold Tuning
+- `v8.2` - README Refresh
+- `v8.3` - FFmpeg Detection
+- `v8.4` - Artist Dedupe
+- `v8.5` - Smart Skip
+- `v8.6` - Query Sanitize
+- `v8.7` - Cookie Toggle
+
+Tip: Newer non-tagged commits are continuous fixes on top of `v8.7` in the `versions` branch.
+
+---
 ## 📝 Background Requirements
 
 To run this bot, make sure you have:
@@ -46,6 +115,29 @@ To run this bot, make sure you have:
 
 ---
 
+## Version Map
+
+Short labels for tagged releases so you can understand each version quickly.
+
+- `v1.0` - Core Release
+- `v2.0` - Query Fix
+- `v3.0` - Cookie Hardening
+- `v4.0` - Library Audit
+- `v5.0` - Playlist Scaling
+- `v6.0` - Multi Tier
+- `v7.0` - Fallback Fix
+- `v8.0` - iTunes Switch
+- `v8.1` - Threshold Tuning
+- `v8.2` - README Refresh
+- `v8.3` - FFmpeg Detection
+- `v8.4` - Artist Dedupe
+- `v8.5` - Smart Skip
+- `v8.6` - Query Sanitize
+- `v8.7` - Cookie Toggle
+
+Tip: Newer non-tagged commits are continuous fixes on top of `v8.7` in the `versions` branch.
+
+---
 ## 📝 Setup Integrations (Creating Your Keys)
 
 ### Part A: Notion Checklist Sync (Highly Recommended)
@@ -66,6 +158,29 @@ Sync your music download list directly from your Notion workspace!
 
 ---
 
+## Version Map
+
+Short labels for tagged releases so you can understand each version quickly.
+
+- `v1.0` - Core Release
+- `v2.0` - Query Fix
+- `v3.0` - Cookie Hardening
+- `v4.0` - Library Audit
+- `v5.0` - Playlist Scaling
+- `v6.0` - Multi Tier
+- `v7.0` - Fallback Fix
+- `v8.0` - iTunes Switch
+- `v8.1` - Threshold Tuning
+- `v8.2` - README Refresh
+- `v8.3` - FFmpeg Detection
+- `v8.4` - Artist Dedupe
+- `v8.5` - Smart Skip
+- `v8.6` - Query Sanitize
+- `v8.7` - Cookie Toggle
+
+Tip: Newer non-tagged commits are continuous fixes on top of `v8.7` in the `versions` branch.
+
+---
 ### Part B: Spotify Developer Keys (Optional)
 *Adding Spotify keys lifts the 100-track playlist limit and lets you pull playlists of any size.*
 
@@ -83,6 +198,29 @@ Sync your music download list directly from your Notion workspace!
 
 ---
 
+## Version Map
+
+Short labels for tagged releases so you can understand each version quickly.
+
+- `v1.0` - Core Release
+- `v2.0` - Query Fix
+- `v3.0` - Cookie Hardening
+- `v4.0` - Library Audit
+- `v5.0` - Playlist Scaling
+- `v6.0` - Multi Tier
+- `v7.0` - Fallback Fix
+- `v8.0` - iTunes Switch
+- `v8.1` - Threshold Tuning
+- `v8.2` - README Refresh
+- `v8.3` - FFmpeg Detection
+- `v8.4` - Artist Dedupe
+- `v8.5` - Smart Skip
+- `v8.6` - Query Sanitize
+- `v8.7` - Cookie Toggle
+
+Tip: Newer non-tagged commits are continuous fixes on top of `v8.7` in the `versions` branch.
+
+---
 ## 🏃 How to Run the Bot
 
 Open PowerShell in your bot directory (`d:\Music`) and copy-paste the exact commands below to run:
@@ -103,6 +241,29 @@ To download an entire Spotify playlist directly, paste this command and press **
 
 ---
 
+## Version Map
+
+Short labels for tagged releases so you can understand each version quickly.
+
+- `v1.0` - Core Release
+- `v2.0` - Query Fix
+- `v3.0` - Cookie Hardening
+- `v4.0` - Library Audit
+- `v5.0` - Playlist Scaling
+- `v6.0` - Multi Tier
+- `v7.0` - Fallback Fix
+- `v8.0` - iTunes Switch
+- `v8.1` - Threshold Tuning
+- `v8.2` - README Refresh
+- `v8.3` - FFmpeg Detection
+- `v8.4` - Artist Dedupe
+- `v8.5` - Smart Skip
+- `v8.6` - Query Sanitize
+- `v8.7` - Cookie Toggle
+
+Tip: Newer non-tagged commits are continuous fixes on top of `v8.7` in the `versions` branch.
+
+---
 ## 📁 How Your Files Are Organized
 Everything is automatically tagged and sorted into clean, year-less directories:
 📁 `d:\Music\Artist Name\Album Title\Song Name.mp3`
