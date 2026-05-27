@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import re
 import subprocess
@@ -12,9 +12,59 @@ import requests
 # Load environment variables
 dotenv.load_dotenv(Path(__file__).parent.absolute() / ".env")
 
+SPECIAL_VERSION_KEYWORDS = {
+    "live", "acoustic", "instrumental", "karaoke", "remix", "remastered",
+    "sped up", "slowed", "version", "edit", "radio", "mono", "stereo",
+    "demo", "cover", "feat", "ft", "from", "soundtrack", "original motion picture",
+}
+
 
 def sanitize_filename(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*]', "", name).strip()
+
+
+def normalize_text(text: str) -> str:
+    text = (text or "").lower().replace("\u00A0", " ").replace("\u202F", " ")
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def token_set(text: str) -> set[str]:
+    return {w for w in normalize_text(text).split() if len(w) > 1}
+
+
+def parse_track_query(track_query: str) -> tuple[str, str]:
+    parts = track_query.split(" - ", 1)
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return "", track_query.strip()
+
+
+def is_special_version(title: str) -> bool:
+    t = normalize_text(title)
+    return any(k in t for k in SPECIAL_VERSION_KEYWORDS)
+
+
+def title_similarity(expected: str, actual: str) -> float:
+    a = token_set(expected)
+    b = token_set(actual)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / max(1, len(a))
+
+
+def should_replace_download(expected_title: str, actual_title: str) -> bool:
+    sim = title_similarity(expected_title, actual_title)
+    if is_special_version(expected_title):
+        return sim < 0.30
+    return sim < 0.45
+
+
+def find_downloaded_mp3_for_index(output_dir: Path, idx: int) -> Optional[Path]:
+    prefix = f"{idx:03d} - "
+    matches = sorted([p for p in output_dir.glob("*.mp3") if p.name.startswith(prefix)])
+    return matches[-1] if matches else None
 
 
 def get_ffmpeg_location() -> Optional[str]:
@@ -41,16 +91,16 @@ def get_ffmpeg_location() -> Optional[str]:
 
 _warned_missing_cookies = False
 
+
 def get_cookies_args() -> list:
     global _warned_missing_cookies
-    """Prefer cookie file auth; optionally allow browser cookies only when explicitly enabled."""
     cookies_file = os.getenv("YT_COOKIES_FILE", "").strip()
     if cookies_file:
         if os.path.exists(cookies_file):
             return ["--cookies", cookies_file]
-        elif not _warned_missing_cookies:
+        if not _warned_missing_cookies:
             print(f"[WARNING] YT_COOKIES_FILE is configured but file not found: {cookies_file}")
-            print("[ACTION REQUIRED] To resolve: Export YouTube cookies to this file, or enable browser cookies in your .env.")
+            print("[ACTION REQUIRED] Export YouTube cookies to this file, or enable browser cookies in your .env.")
             _warned_missing_cookies = True
 
     if os.getenv("YT_ENABLE_BROWSER_COOKIES", "").strip().lower() not in {"1", "true", "yes", "on"}:
@@ -68,6 +118,8 @@ def append_age_restricted_playlist_track(music_root: Path, playlist_name: str, t
         f.write(
             f"Source: PlaylistDownloader | Playlist: {playlist_name} | Track: {track_query} | Error: {error}\n"
         )
+
+
 def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
     playlist_id = url.split('/')[-1].split('?')[0]
     tracks_to_download: list[str] = []
@@ -138,15 +190,8 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
     return tracks_to_download, playlist_name
 
 
-def pick_video_url(track_query: str, used_ids: set[str]) -> Optional[str]:
-    # Normalize Unicode spacing and punctuation noise for more reliable searching.
-    clean_q = (
-        (track_query or "")
-        .replace("\u00A0", " ")
-        .replace("\u202F", " ")
-        .replace('"', "")
-        .replace(":", " ")
-    )
+def pick_video_url(track_query: str, blocked_ids: set[str]) -> tuple[Optional[str], Optional[str]]:
+    clean_q = normalize_text(track_query).replace('"', "").replace(":", " ")
     clean_q = re.sub(r"\s+", " ", clean_q).strip()
     search_query = f"ytsearch6:{clean_q}"
     cmd = [
@@ -159,25 +204,23 @@ def pick_video_url(track_query: str, used_ids: set[str]) -> Optional[str]:
     ]
     cmd.extend(get_cookies_args())
     res = subprocess.run(cmd, capture_output=True, text=True)
-    # yt-dlp may return nonzero while still printing usable JSON entries.
     if not res.stdout.strip():
-        return None
+        return None, None
 
     try:
         data = json.loads(res.stdout)
     except Exception:
-        return None
+        return None, None
 
     entries = data.get("entries", []) if isinstance(data, dict) else []
     for e in entries:
         if not e or not isinstance(e, dict):
             continue
         vid = e.get("id")
-        if not vid or vid in used_ids:
+        if not vid or vid in blocked_ids:
             continue
-        used_ids.add(vid)
-        return f"https://www.youtube.com/watch?v={vid}"
-    return None
+        return f"https://www.youtube.com/watch?v={vid}", vid
+    return None, None
 
 
 def main() -> None:
@@ -206,81 +249,110 @@ def main() -> None:
     ffmpeg_loc = get_ffmpeg_location()
     used_video_ids: set[str] = set()
 
+    clean_pname = sanitize_filename(playlist_name)
+    output_dir = playlist_dir / clean_pname
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     for i, track_query in enumerate(tracks_to_download, start=1):
         is_link = track_query.startswith("http")
         print(f"[{i}/{len(tracks_to_download)}] {track_query}")
 
         if is_link:
             source_url = track_query
+            source_video_id = None
+            attempts = 1
+            expected_title = ""
         else:
-            source_url = pick_video_url(track_query, used_video_ids)
-            if not source_url:
-                # Last-resort fallback: direct query download path (don't skip the track).
-                fallback_q = (
-                    (track_query or "")
-                    .replace("\u00A0", " ")
-                    .replace("\u202F", " ")
-                    .replace('"', "")
-                    .replace(":", " ")
-                )
-                fallback_q = re.sub(r"\s+", " ", fallback_q).strip()
-                source_url = f"ytsearch1:{fallback_q}"
-                print(f"Resolver fallback for: {track_query}")
+            _, expected_title = parse_track_query(track_query)
+            attempts = 4
+            source_url = None
+            source_video_id = None
+            blocked_ids = set(used_video_ids)
 
-        clean_pname = sanitize_filename(playlist_name)
-        output_template = str(playlist_dir / clean_pname / f"{i:03d} - %(title)s.%(ext)s")
+        downloaded_ok = False
+        for _attempt in range(attempts):
+            if not is_link:
+                source_url, source_video_id = pick_video_url(track_query, blocked_ids)
+                if not source_url:
+                    fallback_q = normalize_text(track_query).replace('"', "").replace(":", " ")
+                    fallback_q = re.sub(r"\s+", " ", fallback_q).strip()
+                    source_url = f"ytsearch1:{fallback_q}"
+                    source_video_id = None
+                    print(f"Resolver fallback for: {track_query}")
 
-        cmd = [
-            "yt-dlp",
-            "--no-config-locations",
-            "--extractor-retries",
-            "3",
-            "--retries",
-            "3",
-            source_url,
-            "--extract-audio",
-            "--audio-format",
-            "mp3",
-            "--audio-quality",
-            "4",
-            "--output",
-            output_template,
-            "--add-metadata",
-            "--postprocessor-args",
-            "ffmpeg:-id3v2_version 3",
-            "--no-playlist",
-            "--ignore-errors",
-            "--trim-filenames",
-            "100",
-            "--no-overwrites",
-        ]
+            output_template = str(output_dir / f"{i:03d} - %(title)s.%(ext)s")
+            cmd = [
+                "yt-dlp",
+                "--no-config-locations",
+                "--extractor-retries", "3",
+                "--retries", "3",
+                source_url,
+                "--extract-audio",
+                "--audio-format", "mp3",
+                "--audio-quality", "4",
+                "--output", output_template,
+                "--add-metadata",
+                "--postprocessor-args", "ffmpeg:-id3v2_version 3",
+                "--no-playlist",
+                "--ignore-errors",
+                "--trim-filenames", "100",
+                "--no-overwrites",
+            ]
+            if ffmpeg_loc:
+                cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+            cmd.extend(get_cookies_args())
 
-        if ffmpeg_loc:
-            cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
+            lower_out = combined_output.lower()
 
-        cmd.extend(get_cookies_args())
+            if "could not copy chrome cookie database" in lower_out or "lockprofilecookiedatabase" in lower_out:
+                print("\n[ERROR] Chrome cookie database is locked because Chrome is currently running!")
+                print("[ACTION REQUIRED] CLOSE Chrome, or export YouTube cookies to D:\\Music\\cookies.txt\n")
 
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
-        lower_out = combined_output.lower()
+            if (
+                "sign in to confirm your age" in lower_out
+                or "inappropriate for some users" in lower_out
+                or "age-restricted" in lower_out
+                or "age restricted" in lower_out
+                or "sign in to confirm you\u2019re not a bot" in lower_out
+                or "sign in to confirm you're not a bot" in lower_out
+            ):
+                extended_error = combined_output.strip()
+                if "could not copy chrome cookie database" in lower_out:
+                    extended_error += "\n[Action Required] Chrome cookie database was locked (Chrome open). Close Chrome or use Netscape format cookies.txt."
+                else:
+                    extended_error += "\n[Action Required] YouTube anti-bot/age wall hit. Please configure cookies.txt to bypass."
+                append_age_restricted_playlist_track(music_root, playlist_name, track_query, extended_error)
 
-        if "could not copy chrome cookie database" in lower_out or "lockprofilecookiedatabase" in lower_out:
-            print("\n[ERROR] Chrome cookie database is locked because Chrome is currently running!")
-            print("[ACTION REQUIRED] To fix this: CLOSE Chrome completely and re-run this script, OR export your YouTube cookies to D:\\Music\\cookies.txt\n")
+            downloaded_file = find_downloaded_mp3_for_index(output_dir, i)
+            if not downloaded_file:
+                if source_video_id:
+                    blocked_ids.add(source_video_id)
+                continue
 
-        if (
-            "sign in to confirm your age" in lower_out
-            or "inappropriate for some users" in lower_out
-            or "age-restricted" in lower_out
-            or "age restricted" in lower_out
-            or "sign in to confirm you’re not a bot" in lower_out
-        ):
-            extended_error = combined_output.strip()
-            if "could not copy chrome cookie database" in lower_out:
-                extended_error += "\n[Action Required] Chrome cookie database was locked (Chrome open). Close Chrome or use Netscape format cookies.txt."
-            elif "not a bot" in lower_out or "confirm your age" in lower_out:
-                extended_error += "\n[Action Required] YouTube anti-bot/age wall hit. Please configure cookies.txt to bypass."
-            append_age_restricted_playlist_track(music_root, playlist_name, track_query, extended_error)
+            if is_link:
+                downloaded_ok = True
+                break
+
+            actual_title = re.sub(r"^\d{3}\s*-\s*", "", downloaded_file.stem).strip()
+            if should_replace_download(expected_title, actual_title):
+                print(f"Replacing low-confidence match: expected '{expected_title}' got '{actual_title}'")
+                try:
+                    downloaded_file.unlink()
+                except Exception:
+                    pass
+                if source_video_id:
+                    blocked_ids.add(source_video_id)
+                continue
+
+            downloaded_ok = True
+            if source_video_id:
+                used_video_ids.add(source_video_id)
+            break
+
+        if not downloaded_ok:
+            print(f"Could not resolve a stable match after retries: {track_query}")
 
     print(f"Playlist processing complete! Check: {playlist_dir.absolute()}")
 
