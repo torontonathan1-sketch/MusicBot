@@ -559,6 +559,58 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
         except Exception as e:
             log.error(f"  Could not fetch iTunes tracklist for {album.title!r}: {e}")
 
+    def canonical_album_name(name: str) -> str:
+        n = name.lower()
+        for kw in [
+            "deluxe edition", "bonus track version", "bonus tracks", "full moon edition",
+            "deluxe", "expanded", "bonus", "complete", "special", "super", "tour edition",
+            "repacked", "platinum", "remastered", "anniversary edition",
+            "collector's edition", "edition", "version", "international",
+        ]:
+            n = n.replace(kw, "")
+        n = re.sub(r"[^\w\s]", " ", n)
+        return " ".join(n.split())
+
+    def track_signature(album: Album) -> set[str]:
+        sig = set()
+        for t in album.tracks:
+            tn = re.sub(r"[^\w\s]", " ", (t.title or "").lower())
+            tn = " ".join(tn.split())
+            if tn:
+                sig.add(tn)
+        return sig
+
+    def overlap_ratio(a: set[str], b: set[str]) -> float:
+        if not a or not b:
+            return 0.0
+        return len(a & b) / max(1, min(len(a), len(b)))
+
+    # Second-pass dedupe: if similarly named albums share most tracks, keep the bigger edition.
+    by_name: dict[str, list[Album]] = {}
+    for a in populated:
+        by_name.setdefault(canonical_album_name(a.title), []).append(a)
+
+    collapsed: list[Album] = []
+    for _, group in by_name.items():
+        if len(group) == 1:
+            collapsed.append(group[0])
+            continue
+
+        # Prefer the release with the largest tracklist when overlap is high.
+        group_sorted = sorted(group, key=lambda x: x.track_count, reverse=True)
+        kept = []
+        for candidate in group_sorted:
+            cand_sig = track_signature(candidate)
+            duplicate = False
+            for existing in kept:
+                if overlap_ratio(cand_sig, track_signature(existing)) >= 0.70:
+                    duplicate = True
+                    break
+            if not duplicate:
+                kept.append(candidate)
+        collapsed.extend(kept)
+
+    populated = collapsed
     populated.sort(key=lambda a: (a.year or 9999, a.title))
     log.info(f"  Ready to download {len(populated)} iTunes albums.")
     return populated
