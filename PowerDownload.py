@@ -926,12 +926,53 @@ def download_track_individually(
 
     ffmpeg_loc = get_ffmpeg_location()
     last_error = "Download failed (no output file created)"
+    expected_duration_sec = (track.duration_ms / 1000.0) if track.duration_ms else None
+
+    def pick_best_candidate(query: str) -> str:
+        """
+        Resolve a stable YouTube URL from search results and enforce duration matching when possible.
+        If no duration-qualified candidate exists, fall back to the raw search query.
+        """
+        search_cmd = [
+            YTDLP_PATH,
+            "--no-config-locations",
+            "--dump-single-json",
+            "--default-search", "ytsearch",
+            query,
+        ]
+        try:
+            res = subprocess.run(search_cmd, capture_output=True, text=True, timeout=60)
+            if not res.stdout.strip():
+                return query
+            payload = json.loads(res.stdout)
+            entries = payload.get("entries", []) if isinstance(payload, dict) else []
+            if not entries:
+                return query
+
+            # First pass: strict duration filter (within +/- 3 seconds)
+            if expected_duration_sec:
+                for e in entries:
+                    vid = e.get("id")
+                    dur = e.get("duration")
+                    if not vid or not dur:
+                        continue
+                    if abs(float(dur) - expected_duration_sec) <= 3.0:
+                        return f"https://www.youtube.com/watch?v={vid}"
+
+            # Fallback: first entry URL
+            first_id = entries[0].get("id")
+            if first_id:
+                return f"https://www.youtube.com/watch?v={first_id}"
+        except Exception:
+            pass
+        return query
 
     for query in queries:
+        source = pick_best_candidate(query)
         cmd = [
             YTDLP_PATH,
             "--no-config-locations",
-            query,
+            source,
             "--extract-audio",
             "--audio-format", "mp3",
             "--audio-quality", "4",
