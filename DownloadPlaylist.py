@@ -171,7 +171,10 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
                             if name:
                                 tracks_to_download.append(f"{artist} - {name}")
                         tracks_url = tracks_data.get("next")
-                    api_success = True
+                    # Only treat API path as successful when it actually yields tracks.
+                    api_success = len(tracks_to_download) > 0
+                    if not api_success:
+                        print("Spotify API returned 0 tracks for this playlist. Falling back to public web scraper...")
         except Exception as e:
             print(f"Spotify API error: {e}. Falling back to public web scraper...")
 
