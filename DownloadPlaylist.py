@@ -3,8 +3,10 @@ import os
 import re
 import subprocess
 import sys
+import webbrowser
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import dotenv
 import requests
@@ -128,6 +130,84 @@ def append_age_restricted_playlist_track(music_root: Path, playlist_name: str, t
         )
 
 
+def get_spotify_user_token(music_root: Path) -> Optional[str]:
+    """Get a user-authorized Spotify token for private/full playlist access."""
+    token_file = music_root / "spotify_user_token.json"
+    client_id = (os.getenv("SPOTIFY_CLIENT_ID") or "").strip()
+    client_secret = (os.getenv("SPOTIFY_CLIENT_SECRET") or "").strip()
+    redirect_uri = (os.getenv("SPOTIFY_REDIRECT_URI") or "http://127.0.0.1:8888/callback").strip()
+
+    env_token = (os.getenv("SPOTIFY_ACCESS_TOKEN") or "").strip()
+    if env_token:
+        return env_token
+
+    if token_file.exists():
+        try:
+            data = json.loads(token_file.read_text(encoding="utf-8"))
+            cached = (data.get("access_token") or "").strip()
+            if cached:
+                return cached
+        except Exception:
+            pass
+
+    if not client_id:
+        return None
+
+    print("Spotify user login can unlock private/full playlists.")
+    scope = "playlist-read-private playlist-read-collaborative user-library-read"
+    auth_url = "https://accounts.spotify.com/authorize?" + urlencode(
+        {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "state": "musicbot_state",
+            "show_dialog": "true",
+        }
+    )
+    print("\nOpen this URL and approve access:")
+    print(auth_url)
+    try:
+        webbrowser.open(auth_url)
+    except Exception:
+        pass
+
+    redirected = input("Paste the full redirect URL here (or press Enter to skip): ").strip()
+    if not redirected:
+        return None
+
+    try:
+        code = parse_qs(urlparse(redirected).query).get("code", [None])[0]
+        if not code:
+            return None
+        if not client_secret:
+            print("SPOTIFY_CLIENT_SECRET missing in .env; cannot exchange auth code.")
+            return None
+        token_resp = requests.post(
+            "https://accounts.spotify.com/api/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=15,
+        )
+        if token_resp.status_code != 200:
+            print(f"Spotify token exchange failed: HTTP {token_resp.status_code}")
+            return None
+        token_data = token_resp.json()
+        access_token = (token_data.get("access_token") or "").strip()
+        if access_token:
+            token_file.write_text(json.dumps({"access_token": access_token}, indent=2), encoding="utf-8")
+            print(f"Saved Spotify user token to: {token_file}")
+            return access_token
+    except Exception as e:
+        print(f"Spotify user auth failed: {e}")
+    return None
+
+
 def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
     playlist_id = url.split('/')[-1].split('?')[0]
     tracks_to_download: list[str] = []
@@ -136,8 +216,39 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
     client_id = os.getenv("SPOTIFY_CLIENT_ID")
     client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
     api_success = False
+    music_root = Path(__file__).parent.absolute()
 
-    if client_id and client_secret:
+    user_access_token = get_spotify_user_token(music_root)
+    if user_access_token:
+        print("Spotify user token detected. Fetching full playlist with user permissions...")
+        try:
+            headers = {"Authorization": f"Bearer {user_access_token}"}
+            meta_url = f"https://api.spotify.com/v1/playlists/{playlist_id}"
+            r_meta = requests.get(meta_url, headers=headers, timeout=10)
+            if r_meta.status_code == 200:
+                playlist_name = r_meta.json().get("name", "Unknown Playlist")
+                tracks_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks?limit=100"
+                while tracks_url:
+                    r_tracks = requests.get(tracks_url, headers=headers, timeout=10)
+                    if r_tracks.status_code != 200:
+                        break
+                    tracks_data = r_tracks.json()
+                    for item in tracks_data.get("items", []):
+                        t = item.get("track")
+                        if not t:
+                            continue
+                        name = t.get("name")
+                        artist = t.get("artists", [{}])[0].get("name", "Unknown")
+                        if name:
+                            tracks_to_download.append(f"{artist} - {name}")
+                    tracks_url = tracks_data.get("next")
+                api_success = len(tracks_to_download) > 0
+                if not api_success:
+                    print("Spotify user-token API returned 0 tracks. Trying app/public fallbacks...")
+        except Exception as e:
+            print(f"Spotify user-token fetch failed: {e}")
+
+    if (not api_success) and client_id and client_secret:
         print("Spotify API credentials detected. Fetching entire playlist via Spotify API...")
         try:
             auth_response = requests.post(
