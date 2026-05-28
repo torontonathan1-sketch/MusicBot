@@ -15,6 +15,7 @@ import logging
 import argparse
 import subprocess
 import base64
+from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
@@ -90,6 +91,8 @@ INCLUDE_TYPES = {"Album", "EP"}
 # Secondary types to exclude (e.g. compilations, live albums)
 EXCLUDE_SECONDARY = {"Compilation", "Live", "Remix", "Spokenword", "Audiobook", "DJ-mix"}
 
+FULL_ALBUM_SUFFIX = " (full)"
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -119,6 +122,65 @@ class Album:
     secondary_types: list[str]
     popularity: int = 0
     tracks: list[Track] = field(default_factory=list)
+
+
+def normalize_album_key(name: str) -> str:
+    n = name.lower()
+    for kw in [
+        "deluxe edition", "bonus track version", "bonus tracks", "full moon edition",
+        "deluxe", "expanded", "bonus", "complete", "special", "super", "tour edition",
+        "repacked", "platinum", "remastered", "anniversary edition",
+        "collector's edition", "edition", "version", "international",
+    ]:
+        n = n.replace(kw, "")
+    n = re.sub(r"[^\w\s]", " ", n)
+    return " ".join(n.split())
+
+
+def album_variant_score(album: Album) -> tuple:
+    title = album.title.lower()
+    remaster = 1 if "remaster" in title else 0
+    deluxe = 1 if any(k in title for k in ["deluxe", "expanded", "bonus", "full moon", "anniversary", "edition"]) else 0
+    full_like = 1 if "full" in title else 0
+    return (
+        remaster,
+        deluxe,
+        full_like,
+        album.track_count,
+        album.popularity,
+        album.year or 0,
+    )
+
+
+def merge_album_family(group: list[Album]) -> list[Album]:
+    if len(group) == 1:
+        return group
+
+    group_sorted = sorted(group, key=album_variant_score, reverse=True)
+    base = group_sorted[0]
+    merged_tracks = list(base.tracks)
+    merged_any = False
+    existing_norm = {re.sub(r"[^\w\s]", " ", (t.title or "").lower()).strip() for t in merged_tracks}
+    kept = [base]
+
+    base_sig = {re.sub(r"[^\w\s]", " ", (t.title or "").lower()).strip() for t in base.tracks}
+    for candidate in group_sorted[1:]:
+        cand_sig = {re.sub(r"[^\w\s]", " ", (t.title or "").lower()).strip() for t in candidate.tracks}
+        overlap = len(base_sig & cand_sig) / max(1, min(len(base_sig), len(cand_sig))) if base_sig and cand_sig else 0.0
+        if overlap >= 0.70:
+            for t in candidate.tracks:
+                norm = re.sub(r"[^\w\s]", " ", (t.title or "").lower()).strip()
+                if norm and norm not in existing_norm:
+                    merged_tracks.append(t)
+                    existing_norm.add(norm)
+                    merged_any = True
+            continue
+        kept.append(candidate)
+
+    base.tracks = merged_tracks
+    if merged_any or len(kept) > 1:
+        base.title = f"{base.title}{FULL_ALBUM_SUFFIX}"
+    return [base] + kept[1:]
 
     @property
     def track_count(self) -> int:
@@ -319,34 +381,26 @@ def get_spotify_albums_api(client_id: str, client_secret: str, artist_name: str)
         # Candidates for popular albums (excluding latest_album if found)
         candidates = [a for a in all_albums if (not latest_album or a["id"] != latest_album["id"])]
         
-        # Deduplicate candidates by base name and prioritize deluxe editions
-        def clean_album_name_for_dedup(name: str) -> str:
-            n = name.lower()
-            for keyword in ["deluxe", "expanded", "bonus", "complete", "special", "super", "tour edition", "repacked", "platinum"]:
-                n = n.replace(keyword, "")
-            n = re.sub(r'[\(\)\[\]\-\:\,\.]', "", n)
-            return " ".join(n.split())
-
-        def is_deluxe(name: str) -> bool:
-            n = name.lower()
-            return any(k in n for k in ["full moon", "deluxe", "expanded", "bonus", "complete", "special", "platinum", "edition"])
-
         groups = {}
         for a in candidates:
-            base_name = clean_album_name_for_dedup(a["name"])
+            base_name = normalize_album_key(a["name"])
             if base_name not in groups:
                 groups[base_name] = []
             groups[base_name].append(a)
             
         representatives = []
         for base_name, group_list in groups.items():
-            deluxe_editions = [a for a in group_list if is_deluxe(a["name"])]
-            if deluxe_editions:
-                deluxe_editions.sort(key=lambda x: x.get("popularity", 0), reverse=True)
-                representatives.append(deluxe_editions[0])
-            else:
-                group_list.sort(key=lambda x: x.get("popularity", 0), reverse=True)
-                representatives.append(group_list[0])
+            representatives.append(sorted(
+                group_list,
+                key=lambda x: (
+                    1 if "remaster" in x["name"].lower() else 0,
+                    1 if any(k in x["name"].lower() for k in ["deluxe", "expanded", "bonus", "full moon", "anniversary", "edition"]) else 0,
+                    x.get("popularity", 0),
+                    len(x.get("tracks", {}).get("items", [])),
+                    x.get("release_date", ""),
+                ),
+                reverse=True,
+            )[0])
                 
         # Sort final representative candidates by popularity descending
         representatives.sort(key=lambda x: x.get("popularity", 0), reverse=True)
@@ -476,37 +530,17 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
         log.info(f"  → Newest release within 1 year (iTunes): {latest_parsed.title} ({latest_parsed.year})")
 
     # Deduplicate by base name, prefer deluxe editions
-    def clean_name(name: str) -> str:
-        n = name.lower()
-        for kw in ["deluxe edition", "bonus track version", "bonus tracks",
-                   "deluxe", "expanded", "bonus", "complete", "special", "super",
-                   "tour edition", "repacked", "platinum", "remastered",
-                   "anniversary edition", "collector's edition", "edition",
-                   "version", "international"]:
-            n = n.replace(kw, "")
-        n = re.sub(r'[\(\)\[\]\-\:\,\.]', "", n)
-        return " ".join(n.split())
-
-    def is_deluxe(name: str) -> bool:
-        n = name.lower()
-        return any(k in n for k in ["full moon", "deluxe", "expanded", "bonus", "complete", "special", "platinum", "edition"])
-
     seen_ids = {latest_parsed.mbid} if latest_parsed else set()
     groups = {}
     for a in candidates_raw:
         if a.mbid in seen_ids:
             continue
-        base = clean_name(a.title)
+        base = normalize_album_key(a.title)
         groups.setdefault(base, []).append(a)
 
     representatives = []
     for base, group in groups.items():
-        deluxe = [a for a in group if is_deluxe(a.title)]
-        if deluxe:
-            # Prefer deluxe; iTunes result order already reflects popularity so use first
-            representatives.append(deluxe[0])
-        else:
-            representatives.append(group[0])  # iTunes ordering = popularity rank
+        representatives.append(sorted(group, key=album_variant_score, reverse=True)[0])
 
     # Keep iTunes result order (index in original results = popularity rank)
     orig_order = {item.get("collectionId"): i for i, item in enumerate(results)}
@@ -560,18 +594,6 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
         except Exception as e:
             log.error(f"  Could not fetch iTunes tracklist for {album.title!r}: {e}")
 
-    def canonical_album_name(name: str) -> str:
-        n = name.lower()
-        for kw in [
-            "deluxe edition", "bonus track version", "bonus tracks", "full moon edition",
-            "deluxe", "expanded", "bonus", "complete", "special", "super", "tour edition",
-            "repacked", "platinum", "remastered", "anniversary edition",
-            "collector's edition", "edition", "version", "international",
-        ]:
-            n = n.replace(kw, "")
-        n = re.sub(r"[^\w\s]", " ", n)
-        return " ".join(n.split())
-
     def track_signature(album: Album) -> set[str]:
         sig = set()
         for t in album.tracks:
@@ -586,46 +608,14 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
             return 0.0
         return len(a & b) / max(1, min(len(a), len(b)))
 
-    def is_deluxe_name(name: str) -> bool:
-        n = name.lower()
-        return any(k in n for k in ["deluxe", "expanded", "bonus", "edition", "full moon", "anniversary"])
-
     # Second-pass dedupe: if similarly named albums share most tracks, merge missing songs into one kept album.
     by_name: dict[str, list[Album]] = {}
     for a in populated:
-        by_name.setdefault(canonical_album_name(a.title), []).append(a)
+        by_name.setdefault(normalize_album_key(a.title), []).append(a)
 
     collapsed: list[Album] = []
     for _, group in by_name.items():
-        if len(group) == 1:
-            collapsed.append(group[0])
-            continue
-
-        # Prefer base/original title when possible; we'll merge missing songs from larger variants into it.
-        group_sorted = sorted(group, key=lambda x: x.track_count)
-        base_candidates = [a for a in group_sorted if not is_deluxe_name(a.title)]
-        base = base_candidates[0] if base_candidates else group_sorted[0]
-        base_sig = track_signature(base)
-        merged_tracks = list(base.tracks)
-
-        for candidate in sorted(group, key=lambda x: x.track_count, reverse=True):
-            if candidate is base:
-                continue
-            cand_sig = track_signature(candidate)
-            if overlap_ratio(base_sig, cand_sig) < 0.70:
-                # Distinct edition/album, keep separately.
-                collapsed.append(candidate)
-                continue
-            # Same album family: merge only missing tracks into base, then drop candidate.
-            existing_norm = {re.sub(r"[^\w\s]", " ", (t.title or "").lower()).strip() for t in merged_tracks}
-            for t in candidate.tracks:
-                norm = re.sub(r"[^\w\s]", " ", (t.title or "").lower()).strip()
-                if norm and norm not in existing_norm:
-                    merged_tracks.append(t)
-                    existing_norm.add(norm)
-
-        base.tracks = merged_tracks
-        collapsed.append(base)
+        collapsed.extend(merge_album_family(group))
 
     populated = collapsed
     populated.sort(key=lambda a: (a.year or 9999, a.title))
@@ -722,34 +712,16 @@ def get_artist_albums_mb(mbid: str) -> list[Album]:
             candidates.append(a)
             seen_cand_ids.add(a.mbid)
 
-    # Deduplicate candidates by base name and prioritize deluxe editions
-    def clean_album_name_for_dedup(name: str) -> str:
-        n = name.lower()
-        for keyword in ["deluxe", "expanded", "bonus", "complete", "special", "super", "tour edition", "repacked", "platinum"]:
-            n = n.replace(keyword, "")
-        n = re.sub(r'[\(\)\[\]\-\:\,\.]', "", n)
-        return " ".join(n.split())
-
-    def is_deluxe(name: str) -> bool:
-        n = name.lower()
-        return any(k in n for k in ["full moon", "deluxe", "expanded", "bonus", "complete", "special", "platinum", "edition"])
-
     groups = {}
     for a in candidates:
-        base_name = clean_album_name_for_dedup(a.title)
+        base_name = normalize_album_key(a.title)
         if base_name not in groups:
             groups[base_name] = []
         groups[base_name].append(a)
         
     representatives = []
     for base_name, group_list in groups.items():
-        deluxe_editions = [a for a in group_list if is_deluxe(a.title)]
-        if deluxe_editions:
-            deluxe_editions.sort(key=lambda x: x.popularity, reverse=True)
-            representatives.append(deluxe_editions[0])
-        else:
-            group_list.sort(key=lambda x: x.popularity, reverse=True)
-            representatives.append(group_list[0])
+        representatives.append(sorted(group_list, key=album_variant_score, reverse=True)[0])
             
     # Sort: studio albums first, then EPs, then by year descending (newest = most relevant)
     def release_type_rank(a):
