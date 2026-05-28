@@ -156,6 +156,7 @@ def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> Retry
                 yt_dlp,
                 "--no-config-locations",
                 query,
+                "--no-playlist",
                 "--extract-audio",
                 "--audio-format", "mp3",
                 "--audio-quality", "4",
@@ -187,6 +188,10 @@ def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> Retry
             combined = (res.stdout or "") + "\n" + (res.stderr or "")
             last_error = combined.strip() or f"yt-dlp exited {res.returncode}"
             print(f"    yt-dlp exit {res.returncode}")
+            if combined.strip():
+                first_err = next((ln for ln in combined.splitlines() if "error" in ln.lower() or "warning" in ln.lower()), "")
+                if first_err:
+                    print(f"    diag: {first_err[:220]}")
             continue
 
         if any(output_dir.glob(f"{safe_title}*.mp3")):
@@ -194,7 +199,8 @@ def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> Retry
             return RetryResult(ok=True)
 
         last_error = "Download failed (no output file created)"
-        print(f"    no output yet")
+        files = [p.name for p in output_dir.iterdir()] if output_dir.exists() else []
+        print(f"    no output yet; files now: {files[:3]}")
 
     return RetryResult(ok=False, last_error=last_error)
 
