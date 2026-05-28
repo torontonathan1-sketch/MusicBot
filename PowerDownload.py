@@ -123,6 +123,15 @@ class Album:
     popularity: int = 0
     tracks: list[Track] = field(default_factory=list)
 
+    @property
+    def track_count(self) -> int:
+        return len(self.tracks)
+
+    @property
+    def folder_name(self) -> str:
+        """Safe folder name: strip illegal Windows chars."""
+        return re.sub(r'[<>:"/\\|?*]', "", self.title).strip()
+
 
 def normalize_album_key(name: str) -> str:
     n = name.lower()
@@ -181,15 +190,6 @@ def merge_album_family(group: list[Album]) -> list[Album]:
     if merged_any or len(kept) > 1:
         base.title = f"{base.title}{FULL_ALBUM_SUFFIX}"
     return [base] + kept[1:]
-
-    @property
-    def track_count(self) -> int:
-        return len(self.tracks)
-
-    @property
-    def folder_name(self) -> str:
-        """Safe folder name: strip illegal Windows chars."""
-        return re.sub(r'[<>:"/\\|?*]', "", self.title).strip()
 
 # ── MusicBrainz & Spotify helpers ──────────────────────────────────────────────
 
@@ -1085,6 +1085,25 @@ def album_already_downloaded(output_dir: Path, expected_count: int) -> bool:
     return False
 
 
+def album_download_progress(output_dir: Path, expected_count: int) -> tuple[int, int]:
+    if not output_dir.exists():
+        return 0, expected_count
+    existing = len(list(output_dir.glob("*.mp3")))
+    return existing, expected_count
+
+
+def artist_library_complete(artist_dir: Path, albums: list[Album]) -> bool:
+    if not artist_dir.exists():
+        return False
+    for album in albums:
+        album_dir = artist_dir / sanitize_filename(album.title)
+        if not album_dir.exists():
+            return False
+        if not album_already_downloaded(album_dir, album.track_count):
+            return False
+    return True
+
+
 
 # ── Main orchestration ────────────────────────────────────────────────────────
 
@@ -1107,12 +1126,19 @@ def process_artist(artist_name: str, total_bar):
         log.warning(f"Could not resolve any albums for: {artist_name!r}")
         return
 
+    if artist_library_complete(artist_dir, albums):
+        log.info(f"Artist already complete on disk, skipping: {artist_name!r}")
+        return
+
     # Album Progress Bar
     album_bar = tqdm(total=len(albums), desc=f"   ↳ {artist_name} Albums", unit="album", leave=False)
 
     for album in albums:
         album_dir = artist_dir / sanitize_filename(album.title)
         album_dir.mkdir(parents=True, exist_ok=True)
+        existing_count, expected_count = album_download_progress(album_dir, album.track_count)
+        if existing_count and existing_count < expected_count:
+            log.info(f"  → Resuming album {album.title!r}: {existing_count}/{expected_count} tracks already present")
 
         # Check which tracks we are actually missing
         missing_tracks = []
