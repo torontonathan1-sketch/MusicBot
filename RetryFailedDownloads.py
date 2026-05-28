@@ -96,6 +96,32 @@ def build_queries(artist: str, album: str, track: str) -> list[str]:
     ]
 
 
+def pick_best_candidate(query: str) -> str:
+    yt_dlp = find_yt_dlp()
+    search_cmd = [
+        yt_dlp,
+        "--no-config-locations",
+        "--dump-single-json",
+        "--default-search",
+        "ytsearch",
+        query,
+    ]
+    try:
+        res = subprocess.run(search_cmd, capture_output=True, text=True, timeout=60)
+        if not res.stdout.strip():
+            return query
+        payload = json.loads(res.stdout)
+        entries = payload.get("entries", []) if isinstance(payload, dict) else []
+        if not entries:
+            return query
+        first_id = entries[0].get("id")
+        if first_id:
+            return f"https://www.youtube.com/watch?v={first_id}"
+    except Exception:
+        pass
+    return query
+
+
 @dataclass
 class RetryResult:
     ok: bool
@@ -111,10 +137,10 @@ def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> Retry
     output_path = output_dir / f"{safe_title}.%(ext)s"
     last_error = "Download failed (no output file created)"
 
+    query = pick_best_candidate(build_queries(artist, album, track)[0])
     for attempt in range(1, attempts + 1):
-        for query in build_queries(artist, album, track):
-            print(f"  attempt {attempt}/{attempts}: {query}")
-            cmd = [
+        print(f"  attempt {attempt}/{attempts}: {query}")
+        cmd = [
                 yt_dlp,
                 "--no-config-locations",
                 query,
@@ -134,29 +160,29 @@ def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> Retry
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
                 "--force-ipv4",
             ]
-            if ffmpeg_loc:
-                cmd.extend(["--ffmpeg-location", ffmpeg_loc])
-            cmd.extend(get_cookies_args())
+        if ffmpeg_loc:
+            cmd.extend(["--ffmpeg-location", ffmpeg_loc])
+        cmd.extend(get_cookies_args())
 
-            try:
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-            except Exception as e:
-                last_error = str(e)
-                print(f"    error: {last_error}")
-                continue
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        except Exception as e:
+            last_error = str(e)
+            print(f"    error: {last_error}")
+            continue
 
-            if res.returncode != 0:
-                combined = (res.stdout or "") + "\n" + (res.stderr or "")
-                last_error = combined.strip() or f"yt-dlp exited {res.returncode}"
-                print(f"    yt-dlp exit {res.returncode}")
-                continue
+        if res.returncode != 0:
+            combined = (res.stdout or "") + "\n" + (res.stderr or "")
+            last_error = combined.strip() or f"yt-dlp exited {res.returncode}"
+            print(f"    yt-dlp exit {res.returncode}")
+            continue
 
-            if any(output_dir.glob(f"{safe_title}*.mp3")):
-                print(f"    saved: {output_dir}")
-                return RetryResult(ok=True)
+        if any(output_dir.glob(f"{safe_title}*.mp3")):
+            print(f"    saved: {output_dir}")
+            return RetryResult(ok=True)
 
-            last_error = "Download failed (no output file created)"
-            print(f"    no output yet")
+        last_error = "Download failed (no output file created)"
+        print(f"    no output yet")
 
     return RetryResult(ok=False, last_error=last_error)
 
