@@ -113,6 +113,7 @@ def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> Retry
 
     for attempt in range(1, attempts + 1):
         for query in build_queries(artist, album, track):
+            print(f"  attempt {attempt}/{attempts}: {query}")
             cmd = [
                 yt_dlp,
                 "--no-config-locations",
@@ -138,15 +139,24 @@ def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> Retry
             cmd.extend(get_cookies_args())
 
             try:
-                subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
             except Exception as e:
                 last_error = str(e)
+                print(f"    error: {last_error}")
+                continue
+
+            if res.returncode != 0:
+                combined = (res.stdout or "") + "\n" + (res.stderr or "")
+                last_error = combined.strip() or f"yt-dlp exited {res.returncode}"
+                print(f"    yt-dlp exit {res.returncode}")
                 continue
 
             if any(output_dir.glob(f"{safe_title}*.mp3")):
+                print(f"    saved: {output_dir}")
                 return RetryResult(ok=True)
 
             last_error = "Download failed (no output file created)"
+            print(f"    no output yet")
 
     return RetryResult(ok=False, last_error=last_error)
 
