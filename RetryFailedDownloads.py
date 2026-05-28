@@ -1,6 +1,8 @@
+import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -193,41 +195,47 @@ def main() -> None:
         print(f"Missing failed downloads file: {failed_file}")
         return
 
-    lines = [line.strip() for line in failed_file.read_text(encoding="utf-8").splitlines() if line.strip()]
-    entries = []
-    for line in lines:
-        parsed = parse_failed_download_line(line)
-        if parsed:
-            entries.append(parsed)
-
-    if not entries:
-        print("No parsable failed download entries found.")
-        return
-
+    seen_lines: set[str] = set()
     retry_log = MUSIC_ROOT / "retry_failed_downloads.log"
-    retried = 0
     fixed = 0
-    still_failed = []
+    print("Watching failed_downloads.txt for new failures. Press Ctrl+C to stop.")
 
-    for entry in entries:
-        retried += 1
-        artist = entry["artist"]
-        album = entry["album"]
-        track = entry["track"]
-        print(f"[{retried}/{len(entries)}] Retrying: {artist} - {track}")
-        result = retry_track(artist, album, track, attempts=3)
-        if result.ok:
-            fixed += 1
-            with open(retry_log, "a", encoding="utf-8") as f:
-                f.write(f"FIXED | Artist: {artist} | Album: {album} | Track: {track}\n")
-        else:
-            still_failed.append(f"Artist: {artist} | Album: {album} | Track: {track} | Error: {result.last_error}")
+    while True:
+        try:
+            current_lines = [line.strip() for line in failed_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        except Exception as e:
+            print(f"Could not read failed downloads file: {e}")
+            time.sleep(10)
+            continue
 
-    if still_failed:
-        (MUSIC_ROOT / "failed_downloads_retry.txt").write_text("\n".join(still_failed) + "\n", encoding="utf-8")
+        new_entries = []
+        for line in current_lines:
+            if line in seen_lines:
+                continue
+            parsed = parse_failed_download_line(line)
+            if parsed:
+                new_entries.append((line, parsed))
+                seen_lines.add(line)
 
-    print(f"Retry complete. Fixed {fixed}/{len(entries)} tracks.")
-    print(f"Output folder: {MUSIC_ROOT}")
+        if not new_entries:
+            time.sleep(10)
+            continue
+
+        for idx, (line, entry) in enumerate(new_entries, start=1):
+            artist = entry["artist"]
+            album = entry["album"]
+            track = entry["track"]
+            print(f"[{idx}/{len(new_entries)}] Retrying: {artist} - {track}")
+            result = retry_track(artist, album, track, attempts=3)
+            if result.ok:
+                fixed += 1
+                with open(retry_log, "a", encoding="utf-8") as f:
+                    f.write(f"FIXED | Artist: {artist} | Album: {album} | Track: {track}\n")
+            else:
+                with open(MUSIC_ROOT / "failed_downloads_retry.txt", "a", encoding="utf-8") as f:
+                    f.write(f"Artist: {artist} | Album: {album} | Track: {track} | Error: {result.last_error}\n")
+
+        print(f"Retry watcher running. Fixed so far: {fixed}")
 
 
 if __name__ == "__main__":
