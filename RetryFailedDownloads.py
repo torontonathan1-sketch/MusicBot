@@ -95,6 +95,9 @@ def build_queries(artist: str, album: str, track: str) -> list[str]:
         f"ytsearch5:{clean_artist} {clean_title} {clean_album}",
         f"ytsearch5:{clean_artist} {title_simple} {clean_album}",
         f"ytsearch5:{clean_artist} {title_simple}",
+        f"ytsearch5:{clean_album} {clean_title}",
+        f"ytsearch5:{clean_album} {title_simple}",
+        f"ytsearch5:{title_simple}",
     ]
 
 
@@ -116,9 +119,10 @@ def pick_best_candidate(query: str) -> str:
         entries = payload.get("entries", []) if isinstance(payload, dict) else []
         if not entries:
             return query
-        first_id = entries[0].get("id")
-        if first_id:
-            return f"https://www.youtube.com/watch?v={first_id}"
+        for e in entries:
+            vid = e.get("id")
+            if vid:
+                return f"https://www.youtube.com/watch?v={vid}"
     except Exception:
         pass
     return query
@@ -139,7 +143,13 @@ def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> Retry
     output_path = output_dir / f"{safe_title}.%(ext)s"
     last_error = "Download failed (no output file created)"
 
-    query = pick_best_candidate(build_queries(artist, album, track)[0])
+    query = None
+    for seed in build_queries(artist, album, track):
+        query = pick_best_candidate(seed)
+        if query:
+            break
+    if not query:
+        query = build_queries(artist, album, track)[0]
     for attempt in range(1, attempts + 1):
         print(f"  attempt {attempt}/{attempts}: {query}")
         cmd = [
