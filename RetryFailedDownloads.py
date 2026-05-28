@@ -105,8 +105,7 @@ class RetryResult:
 def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> RetryResult:
     ffmpeg_loc = get_ffmpeg_location()
     yt_dlp = find_yt_dlp()
-    library_root = MUSIC_ROOT / "RetryFailedDownloads"
-    output_dir = library_root / sanitize_filename(artist) / sanitize_filename(album)
+    output_dir = MUSIC_ROOT / sanitize_filename(artist) / sanitize_filename(album)
     output_dir.mkdir(parents=True, exist_ok=True)
     safe_title = sanitize_filename(track)
     output_path = output_dir / f"{safe_title}.%(ext)s"
@@ -192,7 +191,7 @@ def main() -> None:
         (MUSIC_ROOT / "failed_downloads_retry.txt").write_text("\n".join(still_failed) + "\n", encoding="utf-8")
 
     print(f"Retry complete. Fixed {fixed}/{len(entries)} tracks.")
-    print(f"Output folder: {MUSIC_ROOT / 'RetryFailedDownloads'}")
+    print(f"Output folder: {MUSIC_ROOT}")
 
 
 if __name__ == "__main__":
