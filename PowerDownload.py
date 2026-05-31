@@ -1263,7 +1263,16 @@ def main():
     if progress_file.exists():
         try:
             pdata = json.loads(progress_file.read_text(encoding="utf-8"))
-            completed_artists_lower = {a.lower() for a in pdata.get("completed_artists", []) if isinstance(a, str)}
+            raw_completed = {a.lower() for a in pdata.get("completed_artists", []) if isinstance(a, str)}
+            
+            # Verify physical presence on disk. If deleted, remove from resume list to trigger re-download.
+            for ca in raw_completed:
+                ca_dir = MUSIC_ROOT / sanitize_filename(ca)
+                if ca_dir.exists():
+                    completed_artists_lower.add(ca)
+                else:
+                    log.info(f"🎨 Artist folder '{ca}' was deleted on disk; resetting status to re-download.")
+            
             if completed_artists_lower:
                 log.info(f"Loaded resume state: {len(completed_artists_lower)} completed artists.")
         except Exception as e:
