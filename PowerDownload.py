@@ -481,20 +481,24 @@ def get_itunes_artist_albums(artist_name: str) -> list[Album]:
     # Filter to only albums where the searched artist appears in the artistName
     # This naturally handles collabs (e.g. "Drake & 21 Savage" matches "21 Savage")
     artist_lower = artist_name.lower()
-    # Build first-word of artist for partial matching (e.g. "21" from "21 Savage")
-    artist_words = set(artist_lower.split())
     candidates_raw = []
     for item in results:
         if item.get("wrapperType") != "collection":
             continue
         item_artist = item.get("artistName", "").lower()
-        # Accept if any significant word of our artist name appears in the item's artist
-        # OR if the item artist appears inside our artist name (handles short names)
-        match = (
-            artist_lower in item_artist
-            or item_artist in artist_lower
-            or any(w in item_artist for w in artist_words if len(w) > 2)
-        )
+        # Clean names to compare accurately
+        item_artist_clean = re.sub(r'[^\w\s]', ' ', item_artist).strip()
+        artist_clean = re.sub(r'[^\w\s]', ' ', artist_lower).strip()
+        
+        # Accept exact match, or clean substring matches with word boundaries (handles collabs like "Drake & 21 Savage")
+        if artist_clean == item_artist_clean:
+            match = True
+        elif artist_clean in item_artist_clean:
+            match = bool(re.search(rf"\b{re.escape(artist_clean)}\b", item_artist_clean))
+        elif item_artist_clean in artist_clean:
+            match = bool(re.search(rf"\b{re.escape(item_artist_clean)}\b", artist_clean))
+        else:
+            match = False
         if not match:
             continue
         name = item.get("collectionName", "")
@@ -971,8 +975,8 @@ def download_track_individually(
 
     def pick_best_candidate(query: str) -> str:
         """
-        Resolve a stable YouTube URL from search results and enforce duration matching when possible.
-        If no duration-qualified candidate exists, fall back to the raw search query.
+        Resolve a stable YouTube URL from search results using scoring.
+        Enforces duration matching, validates artist presence, and filters out unwanted covers/translations (e.g. Spanish covers).
         """
         search_cmd = [
             YTDLP_PATH,
@@ -990,17 +994,70 @@ def download_track_individually(
             if not entries:
                 return query
 
-            # First pass: strict duration filter (within +/- 3 seconds)
-            if expected_duration_sec:
-                for e in entries:
-                    vid = e.get("id")
-                    dur = e.get("duration")
-                    if not vid or not dur:
-                        continue
-                    if abs(float(dur) - expected_duration_sec) <= 3.0:
-                        return f"https://www.youtube.com/watch?v={vid}"
+            best_entry = None
+            best_score = -9999.0
 
-            # Fallback: first entry URL
+            expected_title_norm = track.title.lower()
+            artist_norm = artist_name.lower()
+            
+            for e in entries:
+                if not e or not isinstance(e, dict):
+                    continue
+                vid = e.get("id")
+                if not vid:
+                    continue
+                
+                title = (e.get("title") or "").lower()
+                channel = (e.get("channel") or "").lower()
+                dur = e.get("duration")
+                
+                score = 0.0
+                
+                # Check for unwanted language/translation keywords (unless expected in the track title)
+                bad_keywords = ["spanish", "español", "espanol", "traducida", "traducido", "traduccion", "traducción", "cover", "parody", "tribute", "karaoke"]
+                for kw in bad_keywords:
+                    if kw in title and kw not in expected_title_norm:
+                        score -= 50.0  # Heavy penalty for covers/translations
+                
+                # Boost if artist is in title or channel
+                if artist_norm in title:
+                    score += 15.0
+                if artist_norm in channel:
+                    score += 10.0
+                
+                # Boost music topic channels
+                if "topic" in channel:
+                    score += 5.0
+                    
+                # Enforce duration match if available
+                if expected_duration_sec and dur:
+                    try:
+                        dur_diff = abs(float(dur) - expected_duration_sec)
+                        if dur_diff <= 3.0:
+                            score += 30.0  # Perfect duration
+                        elif dur_diff <= 10.0:
+                            score += 10.0  # Close duration
+                        elif dur_diff > 30.0:
+                            score -= 20.0  # Huge duration mismatch
+                    except ValueError:
+                        pass
+                
+                # Match track title words
+                title_words = set(re.sub(r'[^\w\s]', ' ', expected_title_norm).split())
+                video_words = set(re.sub(r'[^\w\s]', ' ', title).split())
+                if title_words:
+                    overlap = len(title_words & video_words) / len(title_words)
+                    score += overlap * 25.0
+                
+                if score > best_score:
+                    best_score = score
+                    best_entry = e
+            
+            if best_entry and best_score > -10.0:
+                vid = best_entry.get("id")
+                return f"https://www.youtube.com/watch?v={vid}"
+            
+            # Fallback to the first entry if no clear candidate was scored highly
             first_id = entries[0].get("id")
             if first_id:
                 return f"https://www.youtube.com/watch?v={first_id}"

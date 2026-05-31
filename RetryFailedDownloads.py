@@ -101,7 +101,7 @@ def build_queries(artist: str, album: str, track: str) -> list[str]:
     ]
 
 
-def pick_best_candidate(query: str) -> str:
+def pick_best_candidate(query: str, artist_name: str, track_title: str) -> str:
     yt_dlp = find_yt_dlp()
     search_cmd = [
         yt_dlp,
@@ -119,10 +119,60 @@ def pick_best_candidate(query: str) -> str:
         entries = payload.get("entries", []) if isinstance(payload, dict) else []
         if not entries:
             return query
+
+        best_entry = None
+        best_score = -9999.0
+
+        expected_title_norm = track_title.lower()
+        artist_norm = artist_name.lower()
+        
         for e in entries:
+            if not e or not isinstance(e, dict):
+                continue
             vid = e.get("id")
-            if vid:
-                return f"https://www.youtube.com/watch?v={vid}"
+            if not vid:
+                continue
+            
+            title = (e.get("title") or "").lower()
+            channel = (e.get("channel") or "").lower()
+            
+            score = 0.0
+            
+            # Check for unwanted language/translation keywords (unless expected in the track title)
+            bad_keywords = ["spanish", "español", "espanol", "traducida", "traducido", "traduccion", "traducción", "cover", "parody", "tribute", "karaoke"]
+            for kw in bad_keywords:
+                if kw in title and kw not in expected_title_norm:
+                    score -= 50.0  # Heavy penalty for covers/translations
+            
+            # Boost if artist is in title or channel
+            if artist_norm in title:
+                score += 15.0
+            if artist_norm in channel:
+                score += 10.0
+            
+            # Boost music topic channels
+            if "topic" in channel:
+                score += 5.0
+                
+            # Match track title words
+            title_words = set(re.sub(r'[^\w\s]', ' ', expected_title_norm).split())
+            video_words = set(re.sub(r'[^\w\s]', ' ', title).split())
+            if title_words:
+                overlap = len(title_words & video_words) / len(title_words)
+                score += overlap * 25.0
+            
+            if score > best_score:
+                best_score = score
+                best_entry = e
+        
+        if best_entry and best_score > -10.0:
+            vid = best_entry.get("id")
+            return f"https://www.youtube.com/watch?v={vid}"
+        
+        # Fallback to first ID
+        first_id = entries[0].get("id")
+        if first_id:
+            return f"https://www.youtube.com/watch?v={first_id}"
     except Exception:
         pass
     return query
@@ -145,7 +195,7 @@ def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> Retry
 
     query = None
     for seed in build_queries(artist, album, track):
-        query = pick_best_candidate(seed)
+        query = pick_best_candidate(seed, artist, track)
         if query:
             break
     if not query:

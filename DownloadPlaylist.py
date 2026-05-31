@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import re
 import subprocess
@@ -343,58 +343,9 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
     api_success = False
     music_root = Path(__file__).parent.absolute()
 
-    user_access_token = get_spotify_user_token(music_root)
-    user_attempts = 0
-    while user_access_token and user_attempts < 2 and not api_success:
-        user_attempts += 1
-        print("Spotify user token detected. Fetching full playlist with user permissions...")
-        try:
-            meta_url = f"https://api.spotify.com/v1/playlists/{playlist_id}"
-            r_meta = spotify_api_get(meta_url, user_access_token)
-            print(f"Spotify user meta status: {r_meta.status_code}")
-            if r_meta.status_code == 200:
-                meta_json = r_meta.json()
-                playlist_name = meta_json.get("name", "Unknown Playlist")
-                embedded_tracks = parse_spotify_playlist_items(meta_json.get("tracks", {}).get("items", []))
-                if embedded_tracks:
-                    tracks_to_download.extend(embedded_tracks)
-                    print(f"Spotify user embedded tracks parsed: {len(embedded_tracks)}")
-                # Keep this endpoint conservative; some tokens return 403 with market=from_token.
-                tracks_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks?limit=100"
-                page = 0
-                got_403 = False
-                while tracks_url:
-                    page += 1
-                    r_tracks = spotify_api_get(tracks_url, user_access_token)
-                    print(f"Spotify user tracks page {page} status: {r_tracks.status_code}")
-                    if r_tracks.status_code != 200:
-                        if r_tracks.status_code == 403:
-                            got_403 = True
-                            print(f"Spotify user tracks 403 body: {(r_tracks.text or '')[:300]}")
-                        break
-                    tracks_data = r_tracks.json()
-                    parsed_tracks = parse_spotify_playlist_items(tracks_data.get("items", []))
-                    for t in parsed_tracks:
-                        if t not in tracks_to_download:
-                            tracks_to_download.append(t)
-                    print(f"Spotify user tracks page {page} items parsed: {len(parsed_tracks)}")
-                    tracks_url = tracks_data.get("next")
-                api_success = len(tracks_to_download) > 0
-                if not api_success:
-                    print("Spotify user-token API returned 0 tracks. Trying app/public fallbacks...")
-                if got_403 and user_attempts == 1:
-                    print("Spotify tracks endpoint returned 403. Clearing cached token and retrying fresh login...")
-                    clear_spotify_user_token(music_root)
-                    user_access_token = get_spotify_user_token(music_root)
-                    continue
-            else:
-                print(f"Spotify user playlist access failed: {r_meta.text[:250]}")
-        except Exception as e:
-            print(f"Spotify user-token fetch failed: {e}")
-        break
-
-    if (not api_success) and client_id and client_secret:
-        print("Spotify API credentials detected. Fetching entire playlist via Spotify API...")
+    # 1. Try Spotify Client Credentials (App API) first since it is completely silent and handles all public playlists
+    if client_id and client_secret:
+        print("Authenticating with Spotify Client Credentials (silent API)...")
         try:
             auth_response = requests.post(
                 "https://accounts.spotify.com/api/token",
@@ -422,11 +373,64 @@ def fetch_spotify_tracks(url: str) -> tuple[list[str], str]:
                         tracks_url = tracks_data.get("next")
                     # Only treat API path as successful when it actually yields tracks.
                     api_success = len(tracks_to_download) > 0
-                    if not api_success:
-                        print("Spotify API returned 0 tracks for this playlist. Falling back to public web scraper...")
+                elif r_meta.status_code in (403, 404):
+                    print("Playlist not found or private via Client Credentials. Trying interactive User login...")
         except Exception as e:
-            print(f"Spotify API error: {e}. Falling back to public web scraper...")
+            print(f"Spotify App API error: {e}. Trying user token flow...")
 
+    # 2. Try User Authentication only if App API was not successful (needed for private playlists)
+    if not api_success:
+        user_access_token = get_spotify_user_token(music_root)
+        user_attempts = 0
+        while user_access_token and user_attempts < 2 and not api_success:
+            user_attempts += 1
+            print("Spotify user token detected. Fetching full playlist with user permissions...")
+            try:
+                meta_url = f"https://api.spotify.com/v1/playlists/{playlist_id}"
+                r_meta = spotify_api_get(meta_url, user_access_token)
+                print(f"Spotify user meta status: {r_meta.status_code}")
+                if r_meta.status_code == 200:
+                    meta_json = r_meta.json()
+                    playlist_name = meta_json.get("name", "Unknown Playlist")
+                    embedded_tracks = parse_spotify_playlist_items(meta_json.get("tracks", {}).get("items", []))
+                    if embedded_tracks:
+                        tracks_to_download.extend(embedded_tracks)
+                        print(f"Spotify user embedded tracks parsed: {len(embedded_tracks)}")
+                    # Keep this endpoint conservative; some tokens return 403 with market=from_token.
+                    tracks_url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks?limit=100"
+                    page = 0
+                    got_403 = False
+                    while tracks_url:
+                        page += 1
+                        r_tracks = spotify_api_get(tracks_url, user_access_token)
+                        print(f"Spotify user tracks page {page} status: {r_tracks.status_code}")
+                        if r_tracks.status_code != 200:
+                            if r_tracks.status_code == 403:
+                                got_403 = True
+                                print(f"Spotify user tracks 403 body: {(r_tracks.text or '')[:300]}")
+                            break
+                        tracks_data = r_tracks.json()
+                        parsed_tracks = parse_spotify_playlist_items(tracks_data.get("items", []))
+                        for t in parsed_tracks:
+                            if t not in tracks_to_download:
+                                tracks_to_download.append(t)
+                        print(f"Spotify user tracks page {page} items parsed: {len(parsed_tracks)}")
+                        tracks_url = tracks_data.get("next")
+                    api_success = len(tracks_to_download) > 0
+                    if not api_success:
+                        print("Spotify user-token API returned 0 tracks. Trying app/public fallbacks...")
+                    if got_403 and user_attempts == 1:
+                        print("Spotify tracks endpoint returned 403. Clearing cached token and retrying fresh login...")
+                        clear_spotify_user_token(music_root)
+                        user_access_token = get_spotify_user_token(music_root)
+                        continue
+                else:
+                    print(f"Spotify user playlist access failed: {r_meta.text[:250]}")
+            except Exception as e:
+                print(f"Spotify user-token fetch failed: {e}")
+            break
+
+    # 3. Fallback to public web player scraper (limits downloads to 100)
     if not api_success:
         print("Fetching tracks via public web player scraper (limits downloads to 100)...")
         embed_url = f"https://open.spotify.com/embed/playlist/{playlist_id}"
@@ -505,8 +509,17 @@ def pick_video_url(track_query: str, blocked_ids: set[str]) -> tuple[Optional[st
 
             overlap = len(expected_tokens & cand_tokens) / max(1, len(expected_tokens))
             score = overlap
+            
             # Prefer music-oriented uploads over obvious live/covers for normal tracks.
             lowered = normalize_text(cand_title)
+            
+            # Check for unwanted language/translation keywords (unless expected in the track title)
+            expected_title_norm = title.lower()
+            bad_keywords = ["spanish", "español", "espanol", "traducida", "traducido", "traduccion", "traducción", "cover", "parody", "tribute", "karaoke"]
+            for kw in bad_keywords:
+                if kw in lowered and kw not in expected_title_norm:
+                    score -= 0.50  # Heavy penalty
+            
             if "official audio" in lowered:
                 score += 0.12
             if "topic" in normalize_text(str(e.get("channel") or "")):
