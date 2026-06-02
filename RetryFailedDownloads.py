@@ -1,18 +1,28 @@
+"""
+RetryFailedDownloads.py — Retry watcher for failed track downloads.
+
+Reads failed_downloads.txt, attempts up to N different search strategies
+per track, cycles through them one per attempt, and uses smarter/shorter
+queries that don't choke YouTube Search.
+"""
 import json
 import os
 import re
 import subprocess
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import dotenv
 
-
 MUSIC_ROOT = Path(__file__).parent.absolute()
 dotenv.load_dotenv(MUSIC_ROOT / ".env")
+POLL_SECONDS = int(os.getenv("RETRY_WATCH_SECONDS", "10"))
 
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def sanitize_filename(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*]', "", name).strip()
@@ -20,20 +30,13 @@ def sanitize_filename(name: str) -> str:
 
 def get_ffmpeg_location() -> Optional[str]:
     import shutil
-
     try:
         if shutil.which("ffmpeg") or shutil.which("ffmpeg.exe"):
             return None
     except Exception:
         pass
-
-    common_paths = [
-        r"C:\Users\Steve\.spotdl",
-        r"C:\Users\toron\.spotdl",
-        str(MUSIC_ROOT / "ffmpeg"),
-        str(MUSIC_ROOT / "ffmpeg" / "bin"),
-    ]
-    for p in common_paths:
+    for p in [r"C:\Users\Steve\.spotdl", r"C:\Users\toron\.spotdl",
+              str(MUSIC_ROOT / "ffmpeg"), str(MUSIC_ROOT / "ffmpeg" / "bin")]:
         if os.path.exists(p):
             return p
     return None
@@ -43,140 +46,156 @@ def get_cookies_args() -> list[str]:
     cookies_file = os.getenv("YT_COOKIES_FILE", "").strip()
     if cookies_file and os.path.exists(cookies_file):
         return ["--cookies", cookies_file]
-
     if os.getenv("YT_ENABLE_BROWSER_COOKIES", "").strip().lower() not in {"1", "true", "yes", "on"}:
         return []
-
     browser = os.getenv("YT_COOKIES_FROM", "").strip()
     if browser:
         return ["--cookies-from-browser", browser]
     return []
 
 
+def validate_youtube_cookies() -> None:
+    cookies_file = os.getenv("YT_COOKIES_FILE", "").strip()
+    if cookies_file and not os.path.exists(cookies_file):
+        print(f"[cookies] YT_COOKIES_FILE points to a missing file: {cookies_file}")
+    if cookies_file and os.path.exists(cookies_file):
+        try:
+            text = Path(cookies_file).read_text(encoding="utf-8", errors="ignore")
+            if ".youtube.com" not in text and "youtube.com" not in text:
+                print(f"[cookies] {cookies_file} exists, but it does not look like YouTube cookies.")
+        except Exception:
+            pass
+    if not get_cookies_args():
+        print("[cookies] No YouTube cookies configured. Age/anti-bot failures will be listed, not bypassed.")
+
+
 def find_yt_dlp() -> str:
     from shutil import which
-
-    for candidate in ["yt-dlp", "yt-dlp.exe"]:
-        if which(candidate):
-            return candidate
+    for c in ["yt-dlp", "yt-dlp.exe"]:
+        if which(c):
+            return c
     return "yt-dlp"
 
 
-def parse_failed_download_line(line: str) -> Optional[dict]:
-    parts = [p.strip() for p in line.split(" | ")]
-    data = {}
-    for part in parts:
-        if ": " not in part:
-            continue
-        key, value = part.split(": ", 1)
-        data[key.strip().lower()] = value.strip()
-
-    artist = data.get("artist")
-    album = data.get("album")
-    track = data.get("track")
-    if not artist or not track:
-        return None
-    return {"artist": artist, "album": album or "Unknown Album", "track": track, "error": data.get("error", "")}
-
-
 def simplify_title(title: str) -> str:
-    base = title.split(":", 1)[0].strip()
-    base = re.sub(r"\b(op\.?|no\.?|nr\.?)\s*", "", base, flags=re.IGNORECASE)
-    base = re.sub(r"[^\w\s]", " ", base)
-    return " ".join(base.split())
+    """Strip feat. clauses, parenthetical subtitles, and punctuation noise."""
+    # Remove feat. and with. clauses
+    t = re.sub(r"\s*\(?(feat\.?|ft\.?|with\.?)\s+[^)]*\)?", "", title, flags=re.IGNORECASE)
+    # Remove parenthetical suffixes like (Live), (Remix), etc.
+    t = re.sub(r"\s*\([^)]*\)\s*$", "", t)
+    t = re.sub(r"[^\w\s]", " ", t)
+    return " ".join(t.split())
+
+
+def shorten_album(album: str) -> str:
+    """Take just the first meaningful word chunk of a long album title."""
+    # Strip edition/deluxe/live etc. suffixes
+    a = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]\s*$", "", album)
+    for kw in ["deluxe", "expanded", "bonus", "remastered", "anniversary", "edition",
+                "version", "international", "complete", "original", "soundtrack"]:
+        a = re.sub(rf"\b{kw}\b", "", a, flags=re.IGNORECASE)
+    a = re.sub(r"[^\w\s]", " ", a)
+    a = " ".join(a.split())
+    # Cap at 5 words so the query doesn't get too long
+    words = a.split()
+    return " ".join(words[:5])
 
 
 def build_queries(artist: str, album: str, track: str) -> list[str]:
-    clean_title = track.replace('"', "").replace(":", " ")
-    clean_album = album.replace('"', "").replace(":", " ")
-    clean_artist = artist.replace('"', "").replace(":", " ")
-    title_simple = simplify_title(track)
-    return [
-        f"ytsearch5:{clean_artist} {clean_title} {clean_album}",
-        f"ytsearch5:{clean_artist} {title_simple} {clean_album}",
-        f"ytsearch5:{clean_artist} {title_simple}",
-        f"ytsearch5:{clean_album} {clean_title}",
-        f"ytsearch5:{clean_album} {title_simple}",
-        f"ytsearch5:{title_simple}",
-    ]
+    """Build a list of progressively simpler search queries to try in order."""
+    clean_artist = artist.replace('"', '').replace(':', ' ').strip()
+    clean_track  = track.replace('"', '').replace(':', ' ').strip()
+    short_album  = shorten_album(album)
+    simple_track = simplify_title(track)
+
+    queries = []
+    # Most specific first
+    if simple_track != clean_track:
+        queries.append(f"ytsearch5:{clean_artist} {simple_track} {short_album}")
+    queries.append(f"ytsearch5:{clean_artist} {simple_track}")
+    queries.append(f"ytsearch5:{clean_artist} {clean_track}")
+    if short_album:
+        queries.append(f"ytsearch5:{clean_artist} {simple_track} {short_album}")
+    queries.append(f"ytsearch5:{simple_track} {clean_artist}")
+    # Last resort — just the simplified title
+    queries.append(f"ytsearch3:{simple_track}")
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for q in queries:
+        q_norm = " ".join(q.split())
+        if q_norm not in seen:
+            seen.add(q_norm)
+            unique.append(q_norm)
+    return unique
 
 
-def pick_best_candidate(query: str, artist_name: str, track_title: str) -> str:
+def pick_best_candidate(query: str, artist_name: str, track_title: str) -> Optional[str]:
+    """
+    Run yt-dlp --dump-single-json on the query, score each result,
+    and return the best YouTube URL. Returns None on failure.
+    """
     yt_dlp = find_yt_dlp()
     search_cmd = [
-        yt_dlp,
-        "--no-config-locations",
-        "--dump-single-json",
-        "--default-search",
-        "ytsearch",
+        yt_dlp, "--no-config-locations",
+        "--dump-single-json", "--default-search", "ytsearch",
+        "--no-warnings",
         query,
     ]
+    search_cmd.extend(get_cookies_args())
     try:
         res = subprocess.run(search_cmd, capture_output=True, text=True, timeout=60)
         if not res.stdout.strip():
-            return query
+            return None
         payload = json.loads(res.stdout)
         entries = payload.get("entries", []) if isinstance(payload, dict) else []
         if not entries:
-            return query
+            return None
 
-        best_entry = None
-        best_score = -9999.0
+        expected_norm = track_title.lower()
+        artist_norm   = artist_name.lower()
+        bad_kw = {"spanish", "español", "espanol", "traducida", "traducido",
+                  "cover", "parody", "tribute", "karaoke"}
 
-        expected_title_norm = track_title.lower()
-        artist_norm = artist_name.lower()
-        
+        best_entry, best_score = None, -9999.0
         for e in entries:
             if not e or not isinstance(e, dict):
                 continue
             vid = e.get("id")
             if not vid:
                 continue
-            
-            title = (e.get("title") or "").lower()
+            title   = (e.get("title") or "").lower()
             channel = (e.get("channel") or "").lower()
-            
-            score = 0.0
-            
-            # Check for unwanted language/translation keywords (unless expected in the track title)
-            bad_keywords = ["spanish", "español", "espanol", "traducida", "traducido", "traduccion", "traducción", "cover", "parody", "tribute", "karaoke"]
-            for kw in bad_keywords:
-                if kw in title and kw not in expected_title_norm:
-                    score -= 50.0  # Heavy penalty for covers/translations
-            
-            # Boost if artist is in title or channel
-            if artist_norm in title:
-                score += 15.0
-            if artist_norm in channel:
-                score += 10.0
-            
-            # Boost music topic channels
-            if "topic" in channel:
-                score += 5.0
-                
-            # Match track title words
-            title_words = set(re.sub(r'[^\w\s]', ' ', expected_title_norm).split())
-            video_words = set(re.sub(r'[^\w\s]', ' ', title).split())
-            if title_words:
-                overlap = len(title_words & video_words) / len(title_words)
-                score += overlap * 25.0
-            
+            score   = 0.0
+
+            for kw in bad_kw:
+                if kw in title and kw not in expected_norm:
+                    score -= 50.0
+
+            if artist_norm in title:   score += 15.0
+            if artist_norm in channel: score += 10.0
+            if "topic" in channel:     score += 5.0
+
+            t_words = set(re.sub(r"[^\w\s]", " ", expected_norm).split())
+            v_words = set(re.sub(r"[^\w\s]", " ", title).split())
+            if t_words:
+                score += len(t_words & v_words) / len(t_words) * 25.0
+
             if score > best_score:
-                best_score = score
-                best_entry = e
-        
+                best_score, best_entry = score, e
+
         if best_entry and best_score > -10.0:
-            vid = best_entry.get("id")
-            return f"https://www.youtube.com/watch?v={vid}"
-        
-        # Fallback to first ID
-        first_id = entries[0].get("id")
+            return f"https://www.youtube.com/watch?v={best_entry['id']}"
+        first_id = entries[0].get("id") if entries else None
         if first_id:
             return f"https://www.youtube.com/watch?v={first_id}"
-    except Exception:
-        pass
-    return query
+    except Exception as ex:
+        print(f"    [search error] {ex}")
+    return None
 
+
+# ── core retry ────────────────────────────────────────────────────────────────
 
 @dataclass
 class RetryResult:
@@ -184,124 +203,189 @@ class RetryResult:
     last_error: str = ""
 
 
-def retry_track(artist: str, album: str, track: str, attempts: int = 3) -> RetryResult:
+def retry_track(artist: str, album: str, track: str) -> RetryResult:
+    yt_dlp     = find_yt_dlp()
     ffmpeg_loc = get_ffmpeg_location()
-    yt_dlp = find_yt_dlp()
     output_dir = MUSIC_ROOT / sanitize_filename(artist) / sanitize_filename(album)
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_title = sanitize_filename(track)
+    safe_title  = sanitize_filename(track)
     output_path = output_dir / f"{safe_title}.%(ext)s"
-    last_error = "Download failed (no output file created)"
+    last_error  = "Download failed (no output file created)"
 
-    query = None
-    for seed in build_queries(artist, album, track):
-        query = pick_best_candidate(seed, artist, track)
-        if query:
-            break
-    if not query:
-        query = build_queries(artist, album, track)[0]
-    for attempt in range(1, attempts + 1):
-        print(f"  attempt {attempt}/{attempts}: {query}")
+    queries = build_queries(artist, album, track)
+
+    for attempt, query_seed in enumerate(queries, start=1):
+        # Resolve to a direct URL
+        url = pick_best_candidate(query_seed, artist, track)
+        if not url:
+            url = query_seed
+
         cmd = [
-                yt_dlp,
-                "--no-config-locations",
-                query,
-                "--no-playlist",
-                "--extract-audio",
-                "--audio-format", "mp3",
-                "--audio-quality", "4",
-                "--output", str(output_path),
-                "--add-metadata",
-                "--postprocessor-args",
-                f"ffmpeg:-metadata artist={artist!r} -metadata album_artist={artist!r} -metadata album={album!r} -metadata title={track!r} -id3v2_version 3",
-                "--ignore-errors",
-                "--no-warnings",
-                "--trim-filenames", "100",
-                "--sleep-interval", "2",
-                "--max-sleep-interval", "5",
-                "--user-agent",
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
-                "--force-ipv4",
-            ]
+            yt_dlp, "--no-config-locations",
+            url,
+            "--no-playlist",
+            "--format",       "bestaudio/best",
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality","4",
+            "--output",        str(output_path),
+            "--add-metadata",
+            "--postprocessor-args",
+            (f"ffmpeg:-metadata artist={artist!r} "
+             f"-metadata album_artist={artist!r} "
+             f"-metadata album={album!r} "
+             f"-metadata title={track!r} "
+             f"-id3v2_version 3"),
+            "--ignore-errors",
+            "--no-warnings",
+            "--trim-filenames","100",
+            "--sleep-interval","2",
+            "--max-sleep-interval","5",
+        ]
         if ffmpeg_loc:
             cmd.extend(["--ffmpeg-location", ffmpeg_loc])
         cmd.extend(get_cookies_args())
 
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            combined = (res.stderr or "") + "\n" + (res.stdout or "")
+            for line in combined.splitlines():
+                if "error" in line.lower() or "warning" in line.lower():
+                    last_error = line.strip()[:500]
+                    break
         except Exception as e:
             last_error = str(e)
             print(f"    error: {last_error}")
             continue
 
-        if res.returncode != 0:
-            combined = (res.stdout or "") + "\n" + (res.stderr or "")
-            last_error = combined.strip() or f"yt-dlp exited {res.returncode}"
-            print(f"    yt-dlp exit {res.returncode}")
-            if combined.strip():
-                first_err = next((ln for ln in combined.splitlines() if "error" in ln.lower() or "warning" in ln.lower()), "")
-                if first_err:
-                    print(f"    diag: {first_err[:220]}")
-            continue
-
+        # Check success
         if any(output_dir.glob(f"{safe_title}*.mp3")):
-            print(f"    saved: {output_dir}")
             return RetryResult(ok=True)
 
-        last_error = "Download failed (no output file created)"
-        files = [p.name for p in output_dir.iterdir()] if output_dir.exists() else []
-        print(f"    no output yet; files now: {files[:3]}")
+        lower_error = last_error.lower()
+        if any(marker in lower_error for marker in ("sign in", "not a bot", "confirm your age", "age-restricted")):
+            break
 
     return RetryResult(ok=False, last_error=last_error)
 
 
+# ── main ─────────────────────────────────────────────────────────────────────
+
+def parse_failed_line(line: str) -> Optional[dict]:
+    parts = [p.strip() for p in line.split(" | ")]
+    data = {}
+    for part in parts:
+        if ": " not in part:
+            continue
+        key, value = part.split(": ", 1)
+        data[key.strip().lower()] = value.strip()
+    artist = data.get("artist")
+    track  = data.get("track")
+    if not artist or not track:
+        return None
+    return {"artist": artist, "album": data.get("album", "Unknown Album"), "track": track}
+
+
+def load_failed_entries(failed_file: Path) -> list[dict]:
+    """Read failed_downloads.txt, deduplicate by full destination, and keep source lines."""
+    if not failed_file.exists():
+        return []
+    seen = set()
+    entries = []
+    for line in failed_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+        raw_line = line.strip()
+        if not raw_line:
+            continue
+        parsed = parse_failed_line(raw_line)
+        if not parsed:
+            continue
+        key = (
+            parsed["artist"].lower(),
+            parsed.get("album", "").lower(),
+            parsed["track"].lower(),
+        )
+        if key not in seen:
+            seen.add(key)
+            parsed["raw_line"] = raw_line
+            parsed["key"] = key
+            entries.append(parsed)
+    return entries
+
+
+def remove_fixed_entries(failed_file: Path, fixed_lines: set[str]) -> None:
+    if not failed_file.exists() or not fixed_lines:
+        return
+    lines = failed_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+    remaining = [line for line in lines if line.strip() not in fixed_lines]
+    failed_file.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
+
+
+def write_retry_line(path: Path, prefix: str, artist: str, album: str, track: str, error: str = "") -> None:
+    clean_error = " ".join((error or "").replace("|", "/").split())[:500]
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(path, "a", encoding="utf-8") as f:
+        if clean_error:
+            f.write(f"{prefix} | Time: {stamp} | Artist: {artist} | Album: {album} | Track: {track} | Error: {clean_error}\n")
+        else:
+            f.write(f"{prefix} | Time: {stamp} | Artist: {artist} | Album: {album} | Track: {track}\n")
+
+
+def process_entries(entries: list[dict], attempted: set[tuple[str, str, str]], failed_file: Path) -> int:
+    retry_log = MUSIC_ROOT / "retry_failed_downloads.log"
+    still_failed = MUSIC_ROOT / "failed_downloads_retry.txt"
+    fixed_lines: set[str] = set()
+    fixed = 0
+
+    pending = [entry for entry in entries if entry["key"] not in attempted]
+    for idx, entry in enumerate(pending, start=1):
+        artist = entry["artist"]
+        album = entry["album"]
+        track = entry["track"]
+        print(f"[{idx}/{len(pending)}] Retrying: {artist} - {track}")
+        attempted.add(entry["key"])
+
+        result = retry_track(artist, album, track)
+        if result.ok:
+            fixed += 1
+            fixed_lines.add(entry["raw_line"])
+            write_retry_line(retry_log, "FIXED", artist, album, track)
+            print("  fixed")
+        else:
+            write_retry_line(still_failed, "STILL_FAILED", artist, album, track, result.last_error)
+            print(f"  still failed: {result.last_error}")
+
+    remove_fixed_entries(failed_file, fixed_lines)
+    return fixed
+
+
 def main() -> None:
     failed_file = MUSIC_ROOT / "failed_downloads.txt"
-    if not failed_file.exists():
-        print(f"Missing failed downloads file: {failed_file}")
+    once = "--once" in os.sys.argv
+    validate_youtube_cookies()
+
+    attempted: set[tuple[str, str, str]] = set()
+    total_fixed = 0
+
+    if once:
+        entries = load_failed_entries(failed_file)
+        if not entries:
+            print("No failed downloads to retry.")
+            return
+        total_fixed += process_entries(entries, attempted, failed_file)
+        print(f"Done. Fixed {total_fixed}/{len(entries)} tracks.")
         return
 
-    seen_lines: set[str] = set()
-    retry_log = MUSIC_ROOT / "retry_failed_downloads.log"
-    fixed = 0
     print("Watching failed_downloads.txt for new failures. Press Ctrl+C to stop.")
-
-    while True:
-        try:
-            current_lines = [line.strip() for line in failed_file.read_text(encoding="utf-8").splitlines() if line.strip()]
-        except Exception as e:
-            print(f"Could not read failed downloads file: {e}")
-            time.sleep(10)
-            continue
-
-        new_entries = []
-        for line in current_lines:
-            if line in seen_lines:
-                continue
-            parsed = parse_failed_download_line(line)
-            if parsed:
-                new_entries.append((line, parsed))
-                seen_lines.add(line)
-
-        if not new_entries:
-            time.sleep(10)
-            continue
-
-        for idx, (line, entry) in enumerate(new_entries, start=1):
-            artist = entry["artist"]
-            album = entry["album"]
-            track = entry["track"]
-            print(f"[{idx}/{len(new_entries)}] Retrying: {artist} - {track}")
-            result = retry_track(artist, album, track, attempts=3)
-            if result.ok:
-                fixed += 1
-                with open(retry_log, "a", encoding="utf-8") as f:
-                    f.write(f"FIXED | Artist: {artist} | Album: {album} | Track: {track}\n")
-            else:
-                with open(MUSIC_ROOT / "failed_downloads_retry.txt", "a", encoding="utf-8") as f:
-                    f.write(f"Artist: {artist} | Album: {album} | Track: {track} | Error: {result.last_error}\n")
-
-        print(f"Retry watcher running. Fixed so far: {fixed}")
+    try:
+        while True:
+            entries = load_failed_entries(failed_file)
+            new_entries = [entry for entry in entries if entry["key"] not in attempted]
+            if new_entries:
+                total_fixed += process_entries(entries, attempted, failed_file)
+                print(f"Retry watcher running. Fixed so far: {total_fixed}")
+            time.sleep(POLL_SECONDS)
+    except KeyboardInterrupt:
+        print(f"\nRetry watcher stopped. Fixed this session: {total_fixed}")
 
 
 if __name__ == "__main__":

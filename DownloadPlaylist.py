@@ -132,6 +132,18 @@ def append_age_restricted_playlist_track(music_root: Path, playlist_name: str, t
         )
 
 
+def append_playlist_failed_track(music_root: Path, playlist_name: str, track_query: str, error: str):
+    artist, track = parse_track_query(track_query)
+    artist = artist or "Playlist"
+    track = track or track_query
+    clean_error = " ".join((error or "").replace("|", "/").split())[:500]
+    failed_file = music_root / "failed_downloads.txt"
+    with open(failed_file, "a", encoding="utf-8") as f:
+        f.write(
+            f"Artist: {artist} | Album: Playlist - {playlist_name} | Track: {track} | Error: {clean_error}\n"
+        )
+
+
 def parse_spotify_playlist_items(items: list) -> list[str]:
     tracks: list[str] = []
     for item in items:
@@ -509,9 +521,18 @@ def pick_video_url(track_query: str, blocked_ids: set[str]) -> tuple[Optional[st
 
             overlap = len(expected_tokens & cand_tokens) / max(1, len(expected_tokens))
             score = overlap
+
+            lowered = normalize_text(cand_title)
+            channel_norm = normalize_text(str(e.get("channel") or ""))
+            artist_tokens = token_set(artist)
+            if artist_tokens:
+                artist_hit = bool(artist_tokens & token_set(cand_title)) or bool(artist_tokens & token_set(channel_norm))
+                if artist_hit:
+                    score += 0.20
+                else:
+                    score -= 0.25
             
             # Prefer music-oriented uploads over obvious live/covers for normal tracks.
-            lowered = normalize_text(cand_title)
             
             # Check for unwanted language/translation keywords (unless expected in the track title)
             expected_title_norm = title.lower()
@@ -522,7 +543,7 @@ def pick_video_url(track_query: str, blocked_ids: set[str]) -> tuple[Optional[st
             
             if "official audio" in lowered:
                 score += 0.12
-            if "topic" in normalize_text(str(e.get("channel") or "")):
+            if "topic" in channel_norm:
                 score += 0.08
             if not is_special_version(title):
                 if "live" in lowered:
@@ -535,7 +556,7 @@ def pick_video_url(track_query: str, blocked_ids: set[str]) -> tuple[Optional[st
                 best_url = f"https://www.youtube.com/watch?v={vid}"
                 best_vid = vid
 
-    if best_score >= 0.35:
+    if best_score >= 0.50:
         return best_url, best_vid
     return None, None
 
@@ -591,11 +612,14 @@ def main() -> None:
             if not is_link:
                 source_url, source_video_id = pick_video_url(track_query, blocked_ids)
                 if not source_url:
-                    fallback_q = normalize_text(track_query).replace('"', "").replace(":", " ")
-                    fallback_q = re.sub(r"\s+", " ", fallback_q).strip()
-                    source_url = f"ytsearch1:{fallback_q}"
-                    source_video_id = None
-                    print(f"Resolver fallback for: {track_query}")
+                    append_playlist_failed_track(
+                        music_root,
+                        playlist_name,
+                        track_query,
+                        "Resolver could not find a confident YouTube match",
+                    )
+                    print(f"Could not find a confident match, skipping: {track_query}")
+                    break
 
             output_template = str(output_dir / f"{i:03d} - %(title)s.%(ext)s")
             cmd = [
@@ -604,6 +628,7 @@ def main() -> None:
                 "--extractor-retries", "3",
                 "--retries", "3",
                 source_url,
+                "--format", "bestaudio/best",
                 "--extract-audio",
                 "--audio-format", "mp3",
                 "--audio-quality", "4",
@@ -669,6 +694,12 @@ def main() -> None:
             break
 
         if not downloaded_ok:
+            append_playlist_failed_track(
+                music_root,
+                playlist_name,
+                track_query,
+                "Could not resolve a stable match after retries",
+            )
             print(f"Could not resolve a stable match after retries: {track_query}")
 
     print(f"Playlist processing complete! Check: {playlist_dir.absolute()}")

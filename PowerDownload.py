@@ -76,6 +76,21 @@ def get_cookies_args() -> list:
         return ["--cookies-from-browser", browser]
     return []
 
+
+def validate_youtube_cookies() -> None:
+    cookies_file = os.getenv("YT_COOKIES_FILE", "").strip()
+    if cookies_file and not os.path.exists(cookies_file):
+        log.warning(f"YT_COOKIES_FILE points to a missing file: {cookies_file}")
+    if cookies_file and os.path.exists(cookies_file):
+        try:
+            text = Path(cookies_file).read_text(encoding="utf-8", errors="ignore")
+            if ".youtube.com" not in text and "youtube.com" not in text:
+                log.warning(f"{cookies_file} exists, but it does not look like YouTube cookies.")
+        except Exception:
+            pass
+    if not get_cookies_args():
+        log.warning("No YouTube cookies configured. Age/anti-bot failures will be listed for retry instead of bypassed.")
+
 LOG_FILE    = MUSIC_ROOT / "download.log"
 
 # MusicBrainz
@@ -135,6 +150,8 @@ class Album:
 
 def normalize_album_key(name: str) -> str:
     n = name.lower()
+    # Strip parenthetical and bracketed suffixes (e.g. "(Prospekt's March Edition)")
+    n = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]\s*$", "", n)
     for kw in [
         "deluxe edition", "bonus track version", "bonus tracks", "full moon edition",
         "deluxe", "expanded", "bonus", "complete", "special", "super", "tour edition",
@@ -895,6 +912,7 @@ def download_album_playlist(
         YTDLP_PATH,
         "--no-config-locations",
         url,
+        "--format", "bestaudio/best",
         "--extract-audio",
         "--audio-format", "mp3",
         "--audio-quality", "4",
@@ -933,10 +951,11 @@ def download_album_playlist(
 
 def record_failed_download(artist: str, album: str, track: str, error: str):
     failed_file = MUSIC_ROOT / "failed_downloads.txt"
+    clean_error = " ".join(str(error or "").replace("|", "/").split())[:500]
     try:
         with open(failed_file, "a", encoding="utf-8") as f:
-            f.write(f"Artist: {artist} | Album: {album} | Track: {track} | Error: {error}\n")
-        log.warning(f"Recorded failed download in failed_downloads.txt: {track!r} ({error})")
+            f.write(f"Time: {datetime.now():%Y-%m-%d %H:%M:%S} | Artist: {artist} | Album: {album} | Track: {track} | Error: {clean_error}\n")
+        log.warning(f"Recorded failed download in failed_downloads.txt: {track!r} ({clean_error})")
     except Exception as e:
         log.error(f"Failed to write to failed_downloads.txt: {e}")
 
@@ -1071,6 +1090,7 @@ def download_track_individually(
             YTDLP_PATH,
             "--no-config-locations",
             source,
+            "--format", "bestaudio/best",
             "--extract-audio",
             "--audio-format", "mp3",
             "--audio-quality", "4",
@@ -1140,6 +1160,95 @@ def album_already_downloaded(output_dir: Path, expected_count: int) -> bool:
     if len(existing) >= expected_count * 0.85:
         return True
     return False
+
+
+def merge_artist_disk_folders(artist_dir: Path, similarity_threshold: float = 0.80):
+    """
+    Scan an artist's folder for album subfolders that are editions/variants of the same album.
+    Groups by normalize_album_key, then merges any pair sharing >=similarity_threshold track-name
+    overlap. The folder with the most MP3s becomes the destination; unique MP3s from the other
+    folders are moved in; the now-empty source folders are deleted.
+    """
+    if not artist_dir.is_dir():
+        return
+
+    # Collect all direct subdirectories that contain at least one MP3
+    subdirs = [p for p in artist_dir.iterdir() if p.is_dir() and list(p.glob("*.mp3"))]
+    if len(subdirs) < 2:
+        return
+
+    def folder_track_sig(folder: Path) -> set[str]:
+        sig = set()
+        for f in folder.glob("*.mp3"):
+            # Normalize the stem: remove track number prefix (e.g. "01 - ") and collapse punctuation
+            stem = re.sub(r'^\d+[\s\-._]+', '', f.stem)
+            stem = re.sub(r'[^\w\s]', ' ', stem.lower())
+            stem = ' '.join(stem.split())
+            if stem:
+                sig.add(stem)
+        return sig
+
+    def sig_overlap(a: set[str], b: set[str]) -> float:
+        if not a or not b:
+            return 0.0
+        return len(a & b) / max(1, min(len(a), len(b)))
+
+    # Group folders by their normalized album key
+    groups: dict[str, list[Path]] = {}
+    for sd in subdirs:
+        key = normalize_album_key(sd.name)
+        groups.setdefault(key, []).append(sd)
+
+    for key, group in groups.items():
+        if len(group) < 2:
+            continue
+
+        # Build track signatures for each folder
+        sigs = {sd: folder_track_sig(sd) for sd in group}
+
+        # Find clusters of folders that share >= threshold overlap with the biggest one
+        # Sort by number of MP3s desc so the largest is always the merge target
+        sorted_group = sorted(group, key=lambda p: len(list(p.glob("*.mp3"))), reverse=True)
+        base = sorted_group[0]
+        base_sig = sigs[base]
+        to_merge = []
+
+        for candidate in sorted_group[1:]:
+            cand_sig = sigs[candidate]
+            overlap = sig_overlap(base_sig, cand_sig)
+            if overlap >= similarity_threshold:
+                to_merge.append(candidate)
+            else:
+                log.info(f"    Skipping merge of {candidate.name!r} into {base.name!r} (overlap {overlap:.0%} < {similarity_threshold:.0%})")
+
+        if not to_merge:
+            continue
+
+        log.info(f"  📦 Merging {len(to_merge)} variant(s) into {base.name!r}:")
+        for src in to_merge:
+            log.info(f"    ← {src.name}")
+            for mp3 in list(src.glob("*.mp3")):
+                dest = base / mp3.name
+                if dest.exists():
+                    # Destination already has a file with this name — skip (duplicate track)
+                    log.info(f"      ↳ Skipping {mp3.name!r} (already in target)")
+                    continue
+                try:
+                    mp3.rename(dest)
+                    log.info(f"      ↳ Moved {mp3.name!r}")
+                except Exception as e:
+                    log.warning(f"      ↳ Could not move {mp3.name!r}: {e}")
+
+            # Only remove truly empty source folders. Keep non-MP3 leftovers instead of deleting them.
+            try:
+                src.rmdir()
+                log.info(f"    Removed empty folder {src.name!r}")
+            except OSError:
+                log.info(f"    Kept folder {src.name!r} because it still contains non-MP3 files")
+            except Exception as e:
+                log.warning(f"    Could not remove folder {src.name!r}: {e}")
+
+        log.info(f"  ✓ Merge complete. {base.name!r} now has {len(list(base.glob('*.mp3')))} tracks.")
 
 
 def album_download_progress(output_dir: Path, expected_count: int) -> tuple[int, int]:
@@ -1245,7 +1354,14 @@ def process_artist(artist_name: str, total_bar):
         album_bar.update(1)
 
     album_bar.close()
+
+    # Post-download: merge any on-disk album variant folders (e.g. Deluxe vs Standard)
+    log.info(f"  🔍 Checking {artist_name!r} library for mergeable album editions…")
+    merge_artist_disk_folders(artist_dir)
+
+
 def main():
+    validate_youtube_cookies()
     parser = argparse.ArgumentParser()
     parser.add_argument("artists", nargs="*")
     parser.add_argument("--file")
