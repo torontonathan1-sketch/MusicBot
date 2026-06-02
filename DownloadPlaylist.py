@@ -652,6 +652,8 @@ def main() -> None:
                 print("\n[ERROR] Chrome cookie database is locked because Chrome is currently running!")
                 print("[ACTION REQUIRED] CLOSE Chrome, or export YouTube cookies to D:\\Music\\cookies.txt\n")
 
+            time.sleep(4)
+
             if (
                 "sign in to confirm your age" in lower_out
                 or "inappropriate for some users" in lower_out

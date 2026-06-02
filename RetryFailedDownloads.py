@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import time
+import random
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -258,6 +259,8 @@ def retry_track(artist: str, album: str, track: str) -> RetryResult:
             print(f"    error: {last_error}")
             continue
 
+        time.sleep(random.uniform(1.5, 3.5))
+
         # Check success
         if any(output_dir.glob(f"{safe_title}*.mp3")):
             return RetryResult(ok=True)
@@ -383,7 +386,7 @@ def main() -> None:
             if new_entries:
                 total_fixed += process_entries(entries, attempted, failed_file)
                 print(f"Retry watcher running. Fixed so far: {total_fixed}")
-            time.sleep(POLL_SECONDS)
+            time.sleep(max(POLL_SECONDS, 6))
     except KeyboardInterrupt:
         print(f"\nRetry watcher stopped. Fixed this session: {total_fixed}")
 
