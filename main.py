@@ -1,0 +1,5 @@
+print("Hi, Welcome to Music Bot")
+print("What artists do you want to listen to?")
+songs = input("> ")
+print("You have awful music taste")
+print("retiga") 
