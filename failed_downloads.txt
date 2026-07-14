@@ -1,0 +1,6 @@
+Artist: 50 Cent | Album: Animal Ambition: An Untamed Desire to Win (Deluxe Edition) | Track: Don't Worry 'Bout It (feat. Yo Gotti) | Error: Download failed (no output file created)
+Artist: 50 Cent | Album: Animal Ambition: An Untamed Desire to Win (Deluxe Edition) | Track: Everytime I Come Around (feat. Kidd Kidd) | Error: Download failed (no output file created)
+Artist: 50 Cent | Album: Animal Ambition: An Untamed Desire to Win (Deluxe Edition) | Track: Everytime I Come Around (feat. Kidd Kidd) | Error: Download failed (no output file created)
+Artist: Adam Sandler | Album: Eight Crazy Nights (Original Movie Soundtrack) | Track: Intervention Song (with Blake Clark, Kevin Farley, Tom Kenny, Lari Friedman, Jared Sandler, Jillian Sandler, Dylan Sprouse, Carl Weathers, Tyra Banks, Cole Sprouse, Ann Wilson & Richard Page) | Error: Download failed (no output file created)
+Artist: AJR | Album: Jam in the Van - AJR (Live Session, Los Angeles, CA, 2017) - Single | Track: Come Hang Out (Live Session, Los Angeles, CA, 2017) | Error: Download failed (no output file created)
+Artist: AJR | Album: Jam in the Van - AJR (Live Session, Los Angeles, CA, 2017) - Single | Track: I'm Not Famous (Live Session, Los Angeles, CA, 2017) | Error: Download failed (no output file created)

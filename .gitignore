@@ -5,8 +5,8 @@
 *.mp3
 *.wav
 Playlists/
-failed_downloads.txt
 /*/
+!legacy/
 tracks.txt
 
 # Python cache and temporary files
@@ -25,3 +25,9 @@ ENV/
 Thumbs.db
 paste start bot.txt
 scratch_spotify.py
+
+# Exclude YouTube cookies & logs
+cookies.txt
+age_restricted_tracks.txt
+spotify_user_token.json
+
